@@ -4,13 +4,11 @@ import shutil
 import traceback
 import msvcrt
 from glob import glob
-import win32com.client
 import subprocess
 import re
 import sys
 from PIL import Image, ImageDraw, ImageFont
 import fitz
-from docx2pdf import convert
 
 
 config_path = os.path.dirname(sys.argv[0])
@@ -18,7 +16,7 @@ if not os.path.exists(config_path):
     os.mkdir(config_path)
 config_file = os.path.join(config_path, 'config.json')
 
-fingerprint_names = ('SHA1 отпечаток',)
+fingerprint_names = ('Серийный номер',)
 date_make = ('Выдан',)
 date_exp = ('Истекает',)
 
@@ -28,7 +26,11 @@ def read_create_config(config_file):
         'comboBox_certs': 'Сертификат не выбран',
         "lineEdit_input": "",
         "lineEdit_output": "",
+        'lineEdit_prefix': '',
         "checkBox_copy": False,
+        "lineEdit_output1": "",
+        'lineEdit_prefix1': '',
+        "checkBox_copy1": False,
         "checkBox_first_page": True,
         "checkBox_last_page": True,
         "checkBox_all_pages": False,
@@ -98,11 +100,6 @@ def is_file_locked(filepath):
         file_handle.close()
 
 
-def office2pdf(origfile: str) -> str:
-    convert(origfile, origfile+'.pdf')
-    return origfile+'.pdf'
-
-
 def sign_document(s_source_file, cert_data):
     if s_source_file:
         if os.path.exists(s_source_file):
@@ -161,7 +158,7 @@ def add_stamp(doc_path, cert_name, cert_info, pagelist):
     :return:
     """
     template_png_path = os.path.join(os.path.dirname(sys.argv[0]), 'dcs.png')
-    fingerprint = cert_info['SHA1 отпечаток']
+    fingerprint = cert_info['Серийный номер']
     create_date = cert_info['Выдан']
     exp_date = cert_info['Истекает']
     stamp_path = add_text_to_stamp(template_png_path, cert_name, fingerprint, create_date, exp_date)
@@ -181,7 +178,7 @@ def add_text_to_stamp(template_path, cert_name, fingerprint, create_date, exp_da
         'exp_date': (20, 235),
     }
     draw.text(text_positions['cert_name'], "Владелец сертификата: " + cert_name, fill='blue', font=font)
-    draw.text(text_positions['fingerprint'], "Отпечаток SHA1: " + fingerprint, fill='blue', font=font)
+    draw.text(text_positions['fingerprint'], "Сертификат: " + fingerprint[2:], fill='blue', font=font)
     draw.text(text_positions['create_date'], "Создан: " + create_date, fill='blue', font=font)
     draw.text(text_positions['exp_date'], "Действителен по: " + exp_date, fill='blue', font=font)
     modified_image_path = "modified_stamp.png"
@@ -192,15 +189,30 @@ def add_text_to_stamp(template_path, cert_name, fingerprint, create_date, exp_da
 def add_stamp_to_pages(pdf_path, modified_stamp_path, pagelist):
     doc = fitz.open(pdf_path)
     img_stamp = fitz.Pixmap(modified_stamp_path)  # Загружаем изображение
-    for page in pagelist:
-        img_width, img_height = img_stamp.width / 4.5, img_stamp.height / 4.5
-        page_width = doc[page - 1].rect.width
-        page_height = doc[page - 1].rect.height
-        x0 = (page_width/2)-(img_width/2)
-        y0 = page_height-img_height-25
-        x1 = x0 + img_width
-        y1 = y0 + img_height
-        img_rect = fitz.Rect(x0, y0, x1, y1)
-        doc[page-1].insert_image(img_rect, pixmap=img_stamp)
+    if pagelist == 'all':
+        for page in doc:
+            img_width, img_height = img_stamp.width / 4.5, img_stamp.height / 4.5
+            page_width = page.rect.width
+            page_height = page.rect.height
+            x0 = (page_width / 2) - (img_width / 2)
+            y0 = page_height - img_height - 25
+            x1 = x0 + img_width
+            y1 = y0 + img_height
+            img_rect = fitz.Rect(x0, y0, x1, y1)
+            page.insert_image(img_rect, pixmap=img_stamp)
+    else:
+        for page in pagelist:
+            page_index = page-1
+            if page == -1:
+                page_index = -1
+            img_width, img_height = img_stamp.width / 4.5, img_stamp.height / 4.5
+            page_width = doc[page_index].rect.width
+            page_height = doc[page_index].rect.height
+            x0 = (page_width/2)-(img_width/2)
+            y0 = page_height-img_height-25
+            x1 = x0 + img_width
+            y1 = y0 + img_height
+            img_rect = fitz.Rect(x0, y0, x1, y1)
+            doc[page_index].insert_image(img_rect, pixmap=img_stamp)
     doc.saveIncr()
     return pdf_path

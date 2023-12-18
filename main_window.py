@@ -22,9 +22,9 @@ class MainWindow(QMainWindow):
         toolButton_output.clicked.connect(lambda: self.set_user_dir('lineEdit_output'))
 
         toolButton_open_input = self.findChild(QToolButton, 'toolButton_open_input')
-        toolButton_open_input.clicked.connect(lambda: os.startfile(self.config['lineEdit_input']))
+        toolButton_open_input.clicked.connect(lambda: os.startfile(self.config['lineEdit_input'].replace('/','\\')))
         toolButton_open_output = self.findChild(QToolButton, 'toolButton_open_output')
-        toolButton_open_output.clicked.connect(lambda: os.startfile(self.config['lineEdit_output']))
+        toolButton_open_output.clicked.connect(lambda: os.startfile(self.config['lineEdit_output'].replace('/','\\')))
 
         self.lineEdit_input = self.findChild(QLineEdit, 'lineEdit_input')
         self.lineEdit_input.setText(self.config['lineEdit_input'])
@@ -34,9 +34,28 @@ class MainWindow(QMainWindow):
         self.lineEdit_output.setText(self.config['lineEdit_output'])
         self.lineEdit_output.textChanged.connect(self.save_params)
 
+        toolButton_open_output1 = self.findChild(QToolButton, 'toolButton_open_output1')
+        toolButton_open_output1.clicked.connect(lambda: os.startfile(self.config['lineEdit_output1'].replace('/','\\')))
+
+        self.lineEdit_prefix = self.findChild(QLineEdit, 'lineEdit_prefix')
+        self.lineEdit_prefix.setText(self.config['lineEdit_prefix'])
+        self.lineEdit_prefix.textChanged.connect(self.save_params)
+
         self.checkBox_copy = self.findChild(QCheckBox, 'checkBox_copy')
         self.checkBox_copy.setChecked(self.config['checkBox_copy'])
         self.checkBox_copy.stateChanged.connect(self.save_params)
+
+        self.lineEdit_output1 = self.findChild(QLineEdit, 'lineEdit_output1')
+        self.lineEdit_output1.setText(self.config['lineEdit_output1'])
+        self.lineEdit_output1.textChanged.connect(self.save_params)
+
+        self.lineEdit_prefix1 = self.findChild(QLineEdit, 'lineEdit_prefix1')
+        self.lineEdit_prefix1.setText(self.config['lineEdit_prefix1'])
+        self.lineEdit_prefix1.textChanged.connect(self.save_params)
+
+        self.checkBox_copy1 = self.findChild(QCheckBox, 'checkBox_copy1')
+        self.checkBox_copy1.setChecked(self.config['checkBox_copy1'])
+        self.checkBox_copy1.stateChanged.connect(self.save_params)
 
         self.checkBox_first_page = self.findChild(QCheckBox, 'checkBox_first_page')
         self.checkBox_first_page.setChecked(self.config['checkBox_first_page'])
@@ -73,7 +92,7 @@ class MainWindow(QMainWindow):
 
     def custom_drag_enter_event(self, event):
         mime_data = event.mimeData()
-        if mime_data.hasUrls() and all(url.toLocalFile().lower().endswith(('.pdf', '.doc', '.docx', '.rtf')) for url in mime_data.urls()):
+        if mime_data.hasUrls() and all(url.toLocalFile().lower().endswith('.pdf') for url in mime_data.urls()):
             event.acceptProposedAction()
 
     def custom_drop_event(self, event):
@@ -97,12 +116,6 @@ class MainWindow(QMainWindow):
     def sign_documents(self, documents_list):
         doc_signed_count = 0
         for doc in documents_list:
-            if doc.endswith(('.doc', '.docx')) and not os.path.exists(doc + '.pdf'):
-                try:
-                    doc = office2pdf(doc)
-                except:
-                    traceback.print_exc()
-                    print('cant convert', doc)
             if doc.endswith('.pdf') and not os.path.exists(doc+'.sig'):
                 try:
                     if any((check_chosen_pages(self.config['lineEdit_chosen_pages']), self.config['checkBox_first_page'], self.config['checkBox_last_page'], self.config['checkBox_all_pages'])):
@@ -122,8 +135,21 @@ class MainWindow(QMainWindow):
                     if os.path.isfile(doc_sig):
                         doc_signed_count += 1
                         if self.config['checkBox_copy']:
-                            shutil.copy(doc, self.config['lineEdit_output'])
-                            shutil.copy(doc_sig, self.config['lineEdit_output'])
+                            if self.config['lineEdit_prefix']:
+                                if os.path.basename(doc).startswith(self.config['lineEdit_prefix']):
+                                    shutil.copy(doc, self.config['lineEdit_output'])
+                                    shutil.copy(doc_sig, self.config['lineEdit_output'])
+                            else:
+                                shutil.copy(doc, self.config['lineEdit_output'])
+                                shutil.copy(doc_sig, self.config['lineEdit_output'])
+                        if self.config['checkBox_copy1']:
+                            if self.config['lineEdit_prefix1']:
+                                if os.path.basename(doc).startswith(self.config['lineEdit_prefix1']):
+                                    shutil.copy(doc, self.config['lineEdit_output1'])
+                                    shutil.copy(doc_sig, self.config['lineEdit_output1'])
+                            else:
+                                shutil.copy(doc, self.config['lineEdit_output1'])
+                                shutil.copy(doc_sig, self.config['lineEdit_output1'])
                 except:
                     traceback.print_exc()
                     self.show_failure_notification()
@@ -138,8 +164,12 @@ class MainWindow(QMainWindow):
     def save_params(self):
         self.config['comboBox_certs'] = self.comboBox_certs.currentText()
         self.config['lineEdit_input'] = self.lineEdit_input.text()
+        self.config['lineEdit_prefix'] = self.lineEdit_prefix.text()
         self.config['lineEdit_output'] = self.lineEdit_output.text()
         self.config['checkBox_copy'] = self.checkBox_copy.isChecked()
+        self.config['lineEdit_output1'] = self.lineEdit_output1.text()
+        self.config['lineEdit_prefix1'] = self.lineEdit_prefix1.text()
+        self.config['checkBox_copy1'] = self.checkBox_copy1.isChecked()
         self.config['checkBox_first_page'] = self.checkBox_first_page.isChecked()
         self.config['checkBox_last_page'] = self.checkBox_last_page.isChecked()
         self.config['checkBox_all_pages'] = self.checkBox_all_pages.isChecked()
