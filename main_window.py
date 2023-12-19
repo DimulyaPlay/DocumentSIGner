@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import QMainWindow, QLabel, QLineEdit, QCheckBox, QComboBox
 from PyQt5.QtGui import QIcon
 from PyQt5 import uic, QtCore
 from main_functions import *
+import tempfile
 
 
 class MainWindow(QMainWindow):
@@ -214,7 +215,7 @@ class MainWindow(QMainWindow):
                     layout = QHBoxLayout()
                     layout.setContentsMargins(3,3,3,3)
                     file_name_label = QLabel(os.path.basename(file_path))
-                    file_name_label.mouseDoubleClickEvent = lambda _, file=file_path: os.startfile(file)
+                    file_name_label.mouseDoubleClickEvent = lambda _, file=file_path: DoubleClickEvent(file)
                     layout.addWidget(file_name_label)
                     sign_button = QPushButton('Подписать')
                     sign_button.setMaximumWidth(72)
@@ -224,3 +225,9 @@ class MainWindow(QMainWindow):
                     item.setSizeHint(widget.sizeHint())
                     self.listWidget_filelist.setItemWidget(item, widget)
 
+
+def DoubleClickEvent(file_path):
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
+        temp_file_path = temp_file.name
+        shutil.copyfile(file_path, temp_file_path)
+        os.startfile(temp_file_path)
