@@ -70,7 +70,7 @@ def get_cert_data(cert_mgr_path):
     if os.path.exists(cert_mgr_path):
         certs_data = {}
         try:
-            result = subprocess.run([cert_mgr_path, '-list'], capture_output=True, text=True, check=True, encoding='cp866')
+            result = subprocess.run([cert_mgr_path, '-list'], capture_output=True, text=True, check=True, encoding='cp866', creationflags=subprocess.CREATE_NO_WINDOW)
             output = result.stdout
             for i in output.split('-------')[1:]:
                 rows = i.split('\n')
@@ -112,11 +112,11 @@ def sign_document(s_source_file, cert_data):
                 "-out",
                 f"{s_source_file}.sig",
                 "-my",
-                cert_data['SHA1 отпечаток'],
+                cert_data.get('SHA1 отпечаток', cert_data.get('SHA1 Hash','')),
                 "-add",
                 "-detached",
             ]
-            result = subprocess.run(command, capture_output=True, text=True, encoding='cp866')
+            result = subprocess.run(command, capture_output=True, text=True, encoding='cp866', creationflags=subprocess.CREATE_NO_WINDOW)
             output = result.returncode
             if output == 2148081675:
                 print('Не удалось найти закрытый ключ')
@@ -158,9 +158,9 @@ def add_stamp(doc_path, cert_name, cert_info, pagelist):
     :return:
     """
     template_png_path = os.path.join(os.path.dirname(sys.argv[0]), 'dcs.png')
-    fingerprint = cert_info['Серийный номер']
-    create_date = cert_info['Выдан']
-    exp_date = cert_info['Истекает']
+    fingerprint = cert_info.get('Серийный номер', cert_info.get('Serial', ' '))
+    create_date = cert_info.get('Выдан', cert_info.get('Not valid before', ' '))
+    exp_date = cert_info.get('Истекает', cert_info.get('Not valid after', ' '))
     stamp_path = add_text_to_stamp(template_png_path, cert_name, fingerprint, create_date, exp_date)
     stamped_doc = add_stamp_to_pages(doc_path, stamp_path, pagelist)
     return stamped_doc
@@ -179,7 +179,7 @@ def add_text_to_stamp(template_path, cert_name, fingerprint, create_date, exp_da
     }
     draw.text(text_positions['cert_name'], "Владелец сертификата: " + cert_name, fill='blue', font=font)
     draw.text(text_positions['fingerprint'], "Сертификат: " + fingerprint[2:], fill='blue', font=font)
-    draw.text(text_positions['create_date'], "Создан: " + create_date, fill='blue', font=font)
+    draw.text(text_positions['create_date'], "Действителен с: " + create_date, fill='blue', font=font)
     draw.text(text_positions['exp_date'], "Действителен по: " + exp_date, fill='blue', font=font)
     modified_image_path = "modified_stamp.png"
     template_image.save(modified_image_path)
@@ -208,7 +208,7 @@ def add_stamp_to_pages(pdf_path, modified_stamp_path, pagelist):
             img_width, img_height = img_stamp.width / 4.5, img_stamp.height / 4.5
             page_width = doc[page_index].rect.width
             page_height = doc[page_index].rect.height
-            x0 = (page_width/2)-(img_width/2)
+            x0 = (page_width/2)
             y0 = page_height-img_height-25
             x1 = x0 + img_width
             y1 = y0 + img_height

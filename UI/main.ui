@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>552</width>
-    <height>252</height>
+    <height>358</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -30,67 +30,8 @@
     <property name="spacing">
      <number>3</number>
     </property>
-    <item row="2" column="4">
-     <widget class="QLineEdit" name="lineEdit_output">
-      <property name="sizePolicy">
-       <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-        <horstretch>0</horstretch>
-        <verstretch>0</verstretch>
-       </sizepolicy>
-      </property>
-     </widget>
-    </item>
-    <item row="2" column="2">
-     <widget class="QLabel" name="label_6">
-      <property name="sizePolicy">
-       <sizepolicy hsizetype="Maximum" vsizetype="Preferred">
-        <horstretch>0</horstretch>
-        <verstretch>0</verstretch>
-       </sizepolicy>
-      </property>
-      <property name="maximumSize">
-       <size>
-        <width>10</width>
-        <height>16777215</height>
-       </size>
-      </property>
-      <property name="text">
-       <string> В</string>
-      </property>
-     </widget>
-    </item>
-    <item row="4" column="0" colspan="7">
-     <widget class="Line" name="line">
-      <property name="orientation">
-       <enum>Qt::Horizontal</enum>
-      </property>
-     </widget>
-    </item>
-    <item row="8" column="0" colspan="4">
-     <widget class="QCheckBox" name="checkBox_all_pages">
-      <property name="text">
-       <string>Все страницы</string>
-      </property>
-     </widget>
-    </item>
-    <item row="9" column="0" colspan="4">
-     <widget class="QLabel" name="label_3">
-      <property name="sizePolicy">
-       <sizepolicy hsizetype="Preferred" vsizetype="Maximum">
-        <horstretch>0</horstretch>
-        <verstretch>0</verstretch>
-       </sizepolicy>
-      </property>
-      <property name="text">
-       <string>Выбранные страницы (Например: 1,5,6)</string>
-      </property>
-     </widget>
-    </item>
-    <item row="10" column="0" colspan="4">
-     <widget class="QLineEdit" name="lineEdit_chosen_pages"/>
-    </item>
-    <item row="1" column="6">
-     <widget class="QToolButton" name="toolButton_open_input">
+    <item row="3" column="6">
+     <widget class="QToolButton" name="toolButton_open_output1">
       <property name="minimumSize">
        <size>
         <width>27</width>
@@ -112,6 +53,19 @@
       </property>
      </widget>
     </item>
+    <item row="9" column="0" colspan="4">
+     <widget class="QLabel" name="label_3">
+      <property name="sizePolicy">
+       <sizepolicy hsizetype="Preferred" vsizetype="Maximum">
+        <horstretch>0</horstretch>
+        <verstretch>0</verstretch>
+       </sizepolicy>
+      </property>
+      <property name="text">
+       <string>Выбранные страницы (Например: 1,5,6)</string>
+      </property>
+     </widget>
+    </item>
     <item row="1" column="0" colspan="4">
      <widget class="QPushButton" name="pushButton">
       <property name="sizePolicy">
@@ -121,14 +75,100 @@
        </sizepolicy>
       </property>
       <property name="text">
-       <string>Подписать документы в папке</string>
+       <string>Подписать все документы в папке</string>
       </property>
      </widget>
     </item>
-    <item row="6" column="0" colspan="4">
-     <widget class="QCheckBox" name="checkBox_first_page">
+    <item row="2" column="0">
+     <widget class="QCheckBox" name="checkBox_copy">
       <property name="text">
-       <string>Первая страница</string>
+       <string>Копировать файлы, начинающиеся с</string>
+      </property>
+      <property name="tristate">
+       <bool>false</bool>
+      </property>
+     </widget>
+    </item>
+    <item row="7" column="0" colspan="4">
+     <widget class="QCheckBox" name="checkBox_last_page">
+      <property name="text">
+       <string>Последняя страница</string>
+      </property>
+     </widget>
+    </item>
+    <item row="1" column="4">
+     <widget class="QLineEdit" name="lineEdit_input">
+      <property name="sizePolicy">
+       <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+        <horstretch>0</horstretch>
+        <verstretch>0</verstretch>
+       </sizepolicy>
+      </property>
+     </widget>
+    </item>
+    <item row="2" column="1">
+     <widget class="QLineEdit" name="lineEdit_prefix"/>
+    </item>
+    <item row="11" column="0" colspan="3">
+     <widget class="Line" name="line_2">
+      <property name="orientation">
+       <enum>Qt::Horizontal</enum>
+      </property>
+     </widget>
+    </item>
+    <item row="8" column="0" colspan="4">
+     <widget class="QCheckBox" name="checkBox_all_pages">
+      <property name="text">
+       <string>Все страницы</string>
+      </property>
+     </widget>
+    </item>
+    <item row="14" column="0" colspan="3">
+     <widget class="QListWidget" name="listWidget_filelist"/>
+    </item>
+    <item row="2" column="6">
+     <widget class="QToolButton" name="toolButton_open_output">
+      <property name="minimumSize">
+       <size>
+        <width>27</width>
+        <height>22</height>
+       </size>
+      </property>
+      <property name="maximumSize">
+       <size>
+        <width>27</width>
+        <height>22</height>
+       </size>
+      </property>
+      <property name="text">
+       <string/>
+      </property>
+      <property name="icon">
+       <iconset>
+        <normaloff>icons8-открыть-папку-50.png</normaloff>icons8-открыть-папку-50.png</iconset>
+      </property>
+     </widget>
+    </item>
+    <item row="17" column="0">
+     <widget class="QToolButton" name="toolButton_update">
+      <property name="text">
+       <string/>
+      </property>
+      <property name="icon">
+       <iconset>
+        <normaloff>icons8-обновить-50.png</normaloff>icons8-обновить-50.png</iconset>
+      </property>
+      <property name="iconSize">
+       <size>
+        <width>18</width>
+        <height>18</height>
+       </size>
+      </property>
+      <property name="popupMode">
+       <enum>QToolButton::DelayedPopup</enum>
+      </property>
+      <property name="toolButtonStyle">
+       <enum>Qt::ToolButtonIconOnly</enum>
       </property>
      </widget>
     </item>
@@ -148,8 +188,29 @@
       </property>
      </widget>
     </item>
-    <item row="1" column="5">
-     <widget class="QToolButton" name="toolButton_input">
+    <item row="12" column="0">
+     <widget class="QLabel" name="label_8">
+      <property name="text">
+       <string>Список файлов для подписания в папке:</string>
+      </property>
+     </widget>
+    </item>
+    <item row="3" column="0">
+     <widget class="QCheckBox" name="checkBox_copy1">
+      <property name="text">
+       <string>Копировать файлы, начинающиеся с</string>
+      </property>
+     </widget>
+    </item>
+    <item row="6" column="0" colspan="4">
+     <widget class="QCheckBox" name="checkBox_first_page">
+      <property name="text">
+       <string>Первая страница</string>
+      </property>
+     </widget>
+    </item>
+    <item row="3" column="5">
+     <widget class="QToolButton" name="toolButton_output1">
       <property name="minimumSize">
        <size>
         <width>27</width>
@@ -167,8 +228,11 @@
       </property>
      </widget>
     </item>
-    <item row="2" column="6">
-     <widget class="QToolButton" name="toolButton_open_output">
+    <item row="3" column="4">
+     <widget class="QLineEdit" name="lineEdit_output1"/>
+    </item>
+    <item row="1" column="6">
+     <widget class="QToolButton" name="toolButton_open_input">
       <property name="minimumSize">
        <size>
         <width>27</width>
@@ -209,7 +273,36 @@
       </property>
      </widget>
     </item>
-    <item row="5" column="4" rowspan="7" colspan="3">
+    <item row="1" column="5">
+     <widget class="QToolButton" name="toolButton_input">
+      <property name="minimumSize">
+       <size>
+        <width>27</width>
+        <height>22</height>
+       </size>
+      </property>
+      <property name="maximumSize">
+       <size>
+        <width>27</width>
+        <height>22</height>
+       </size>
+      </property>
+      <property name="text">
+       <string>...</string>
+      </property>
+     </widget>
+    </item>
+    <item row="2" column="4">
+     <widget class="QLineEdit" name="lineEdit_output">
+      <property name="sizePolicy">
+       <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+        <horstretch>0</horstretch>
+        <verstretch>0</verstretch>
+       </sizepolicy>
+      </property>
+     </widget>
+    </item>
+    <item row="5" column="4" rowspan="11" colspan="3">
      <widget class="QFrame" name="frame_dropzone">
       <property name="sizePolicy">
        <sizepolicy hsizetype="Minimum" vsizetype="Preferred">
@@ -264,71 +357,8 @@
       </layout>
      </widget>
     </item>
-    <item row="3" column="6">
-     <widget class="QToolButton" name="toolButton_open_output1">
-      <property name="minimumSize">
-       <size>
-        <width>27</width>
-        <height>22</height>
-       </size>
-      </property>
-      <property name="maximumSize">
-       <size>
-        <width>27</width>
-        <height>22</height>
-       </size>
-      </property>
-      <property name="text">
-       <string/>
-      </property>
-      <property name="icon">
-       <iconset>
-        <normaloff>icons8-открыть-папку-50.png</normaloff>icons8-открыть-папку-50.png</iconset>
-      </property>
-     </widget>
-    </item>
-    <item row="5" column="0" colspan="4">
-     <widget class="QLabel" name="label_4">
-      <property name="sizePolicy">
-       <sizepolicy hsizetype="Preferred" vsizetype="Maximum">
-        <horstretch>0</horstretch>
-        <verstretch>0</verstretch>
-       </sizepolicy>
-      </property>
-      <property name="text">
-       <string>Укажите размещение штампа:</string>
-      </property>
-     </widget>
-    </item>
-    <item row="1" column="4">
-     <widget class="QLineEdit" name="lineEdit_input">
-      <property name="sizePolicy">
-       <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-        <horstretch>0</horstretch>
-        <verstretch>0</verstretch>
-       </sizepolicy>
-      </property>
-     </widget>
-    </item>
-    <item row="7" column="0" colspan="4">
-     <widget class="QCheckBox" name="checkBox_last_page">
-      <property name="text">
-       <string>Последняя страница</string>
-      </property>
-     </widget>
-    </item>
-    <item row="11" column="1">
-     <spacer name="verticalSpacer">
-      <property name="orientation">
-       <enum>Qt::Vertical</enum>
-      </property>
-      <property name="sizeHint" stdset="0">
-       <size>
-        <width>20</width>
-        <height>40</height>
-       </size>
-      </property>
-     </spacer>
+    <item row="10" column="0" colspan="4">
+     <widget class="QLineEdit" name="lineEdit_chosen_pages"/>
     </item>
     <item row="0" column="0" colspan="4">
      <widget class="QLabel" name="label">
@@ -346,43 +376,40 @@
       </property>
      </widget>
     </item>
-    <item row="3" column="5">
-     <widget class="QToolButton" name="toolButton_output1">
-      <property name="minimumSize">
-       <size>
-        <width>27</width>
-        <height>22</height>
-       </size>
+    <item row="5" column="0" colspan="4">
+     <widget class="QLabel" name="label_4">
+      <property name="sizePolicy">
+       <sizepolicy hsizetype="Preferred" vsizetype="Maximum">
+        <horstretch>0</horstretch>
+        <verstretch>0</verstretch>
+       </sizepolicy>
+      </property>
+      <property name="text">
+       <string>Укажите размещение штампа:</string>
+      </property>
+     </widget>
+    </item>
+    <item row="4" column="0" colspan="7">
+     <widget class="Line" name="line">
+      <property name="orientation">
+       <enum>Qt::Horizontal</enum>
+      </property>
+     </widget>
+    </item>
+    <item row="2" column="2">
+     <widget class="QLabel" name="label_6">
+      <property name="sizePolicy">
+       <sizepolicy hsizetype="Maximum" vsizetype="Preferred">
+        <horstretch>0</horstretch>
+        <verstretch>0</verstretch>
+       </sizepolicy>
       </property>
       <property name="maximumSize">
        <size>
-        <width>27</width>
-        <height>22</height>
+        <width>10</width>
+        <height>16777215</height>
        </size>
       </property>
-      <property name="text">
-       <string>...</string>
-      </property>
-     </widget>
-    </item>
-    <item row="2" column="1">
-     <widget class="QLineEdit" name="lineEdit_prefix"/>
-    </item>
-    <item row="3" column="4">
-     <widget class="QLineEdit" name="lineEdit_output1"/>
-    </item>
-    <item row="2" column="0">
-     <widget class="QCheckBox" name="checkBox_copy">
-      <property name="text">
-       <string>Копировать файлы, начинающиеся с</string>
-      </property>
-      <property name="tristate">
-       <bool>false</bool>
-      </property>
-     </widget>
-    </item>
-    <item row="3" column="2">
-     <widget class="QLabel" name="label_7">
       <property name="text">
        <string> В</string>
       </property>
@@ -391,20 +418,23 @@
     <item row="3" column="1">
      <widget class="QLineEdit" name="lineEdit_prefix1"/>
     </item>
-    <item row="3" column="0">
-     <widget class="QCheckBox" name="checkBox_copy1">
+    <item row="3" column="2">
+     <widget class="QLabel" name="label_7">
       <property name="text">
-       <string>Копировать файлы, начинающиеся с</string>
+       <string> В</string>
       </property>
      </widget>
     </item>
-    <item row="12" column="0" colspan="7">
+    <item row="17" column="1" colspan="6">
      <widget class="QLabel" name="label_5">
       <property name="text">
        <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Разработка &lt;a href=&quot;https://boosty.to/microrazrab&quot;&gt;&lt;span style=&quot; text-decoration: underline; color:#0000ff;&quot;&gt;DmirtySosnin&lt;/span&gt;&lt;/a&gt;, иконка от &lt;a href=&quot;https://icons8.ru/&quot;&gt;&lt;span style=&quot; text-decoration: underline; color:#0000ff;&quot;&gt;icons8&lt;/span&gt;&lt;/a&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
       </property>
       <property name="textFormat">
        <enum>Qt::RichText</enum>
+      </property>
+      <property name="alignment">
+       <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
       </property>
      </widget>
     </item>

@@ -2,7 +2,7 @@ import sys
 import os
 import traceback
 from PyQt5.QtWidgets import QMainWindow, QLabel, QLineEdit, QCheckBox, QComboBox, QToolButton, QFileDialog,\
-    QPushButton, QFrame, QMessageBox
+    QPushButton, QFrame, QMessageBox, QListWidget, QListWidgetItem, QWidget, QHBoxLayout
 from PyQt5.QtGui import QIcon
 from PyQt5 import uic, QtCore
 from main_functions import *
@@ -16,6 +16,10 @@ class MainWindow(QMainWindow):
         icon = QIcon("UI/icons8-legal-document-64.png")
         self.setWindowIcon(icon)
         self.config = config
+
+        toolButton_update = self.findChild(QToolButton, 'toolButton_update')
+        toolButton_update.clicked.connect(self.update_file_list)
+
         toolButton_input = self.findChild(QToolButton, 'toolButton_input')
         toolButton_input.clicked.connect(lambda: self.set_user_dir('lineEdit_input'))
         toolButton_output = self.findChild(QToolButton, 'toolButton_output')
@@ -88,6 +92,8 @@ class MainWindow(QMainWindow):
         self.frame_dropzone.dragEnterEvent = self.custom_drag_enter_event
         self.frame_dropzone.dropEvent = self.custom_drop_event
 
+        self.listWidget_filelist = self.findChild(QListWidget, 'listWidget_filelist')
+        self.update_file_list()
         self.show()
 
     def custom_drag_enter_event(self, event):
@@ -117,6 +123,7 @@ class MainWindow(QMainWindow):
         doc_signed_count = 0
         for doc in documents_list:
             if doc.endswith('.pdf') and not os.path.exists(doc+'.sig'):
+                print(doc)
                 try:
                     if any((check_chosen_pages(self.config['lineEdit_chosen_pages']), self.config['checkBox_first_page'], self.config['checkBox_last_page'], self.config['checkBox_all_pages'])):
                         pagelist = []
@@ -181,6 +188,7 @@ class MainWindow(QMainWindow):
         options |= QFileDialog.ShowDirsOnly
         directory = QFileDialog.getExistingDirectory(self, "Выбрать директорию", options=options)
         if directory != '':
+            directory = directory.replace('/','\\')
             lineedit = self.findChild(QLineEdit, lineeditname)
             lineedit.setText(fr'{directory}')
 
@@ -189,3 +197,30 @@ class MainWindow(QMainWindow):
 
     def show_failure_notification(self):
         QMessageBox.critical(self, 'Ошибка', 'Ошибка при обработке файлов')
+
+    def update_file_list(self):
+        if config['lineEdit_input']:
+            current_filelist = glob(config['lineEdit_input'] + '/*')
+            current_filelist = [fp for fp in current_filelist if
+                                os.path.isfile(fp) and not fp.endswith(('desktop.ini', 'swapfile.sys')) and is_file_locked(
+                                    fp)]
+            new_filelist = [fp for fp in current_filelist if fp.endswith('.pdf') and not os.path.exists(fp+'.sig')]
+            self.listWidget_filelist.clear()
+            if new_filelist:
+                self.listWidget_filelist.clear()
+                for file_path in new_filelist:
+                    item = QListWidgetItem(self.listWidget_filelist)
+                    widget = QWidget()
+                    layout = QHBoxLayout()
+                    layout.setContentsMargins(3,3,3,3)
+                    file_name_label = QLabel(os.path.basename(file_path))
+                    file_name_label.mouseDoubleClickEvent = lambda _, file=file_path: os.startfile(file)
+                    layout.addWidget(file_name_label)
+                    sign_button = QPushButton('Подписать')
+                    sign_button.setMaximumWidth(72)
+                    sign_button.clicked.connect(lambda _, file=file_path: self.sign_documents([file]))
+                    layout.addWidget(sign_button)
+                    widget.setLayout(layout)
+                    item.setSizeHint(widget.sizeHint())
+                    self.listWidget_filelist.setItemWidget(item, widget)
+
