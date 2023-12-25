@@ -94,10 +94,8 @@ def is_file_locked(filepath):
         file_handle = open(filepath, 'a')
         msvcrt.locking(file_handle.fileno(), msvcrt.LK_NBLCK, 1)
         return True
-    except IOError:
+    except:
         return False
-    finally:
-        file_handle.close()
 
 
 def sign_document(s_source_file, cert_data):

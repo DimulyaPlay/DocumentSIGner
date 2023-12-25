@@ -202,10 +202,8 @@ class MainWindow(QMainWindow):
     def update_file_list(self):
         if config['lineEdit_input']:
             current_filelist = glob(config['lineEdit_input'] + '/*')
-            current_filelist = [fp for fp in current_filelist if
-                                os.path.isfile(fp) and not fp.endswith(('desktop.ini', 'swapfile.sys')) and is_file_locked(
-                                    fp)]
-            new_filelist = [fp for fp in current_filelist if fp.endswith('.pdf') and not os.path.exists(fp+'.sig')]
+            current_filelist = [fp for fp in current_filelist if fp.endswith('.pdf') and not os.path.exists(fp+'.sig')]
+            new_filelist = [fp for fp in current_filelist if is_file_locked(fp)]
             self.listWidget_filelist.clear()
             if new_filelist:
                 self.listWidget_filelist.clear()
