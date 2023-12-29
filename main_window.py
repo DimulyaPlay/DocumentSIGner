@@ -2,10 +2,11 @@ import sys
 import os
 import traceback
 from PyQt5.QtWidgets import QMainWindow, QLabel, QLineEdit, QCheckBox, QComboBox, QToolButton, QFileDialog,\
-    QPushButton, QFrame, QMessageBox, QListWidget, QListWidgetItem, QWidget, QHBoxLayout
+    QPushButton, QFrame, QMessageBox, QListWidget, QListWidgetItem, QWidget, QHBoxLayout, QTableWidget, QDialog, QInputDialog
 from PyQt5.QtGui import QIcon
 from PyQt5 import uic, QtCore
 from main_functions import *
+from editor_window import EditorWindow
 import tempfile
 
 
@@ -17,74 +18,14 @@ class MainWindow(QMainWindow):
         icon = QIcon("UI/icons8-legal-document-64.png")
         self.setWindowIcon(icon)
         self.config = config
-
-        toolButton_update = self.findChild(QToolButton, 'toolButton_update')
-        toolButton_update.clicked.connect(self.update_file_list)
-
-        toolButton_input = self.findChild(QToolButton, 'toolButton_input')
-        toolButton_input.clicked.connect(lambda: self.set_user_dir('lineEdit_input'))
-        toolButton_output = self.findChild(QToolButton, 'toolButton_output')
-        toolButton_output.clicked.connect(lambda: self.set_user_dir('lineEdit_output'))
-
-        toolButton_open_input = self.findChild(QToolButton, 'toolButton_open_input')
-        toolButton_open_input.clicked.connect(lambda: os.startfile(self.config['lineEdit_input'].replace('/','\\')))
-        toolButton_open_output = self.findChild(QToolButton, 'toolButton_open_output')
-        toolButton_open_output.clicked.connect(lambda: os.startfile(self.config['lineEdit_output'].replace('/','\\')))
-
-        self.lineEdit_input = self.findChild(QLineEdit, 'lineEdit_input')
-        self.lineEdit_input.setText(self.config['lineEdit_input'])
-        self.lineEdit_input.textChanged.connect(self.save_params)
-
-        self.lineEdit_output = self.findChild(QLineEdit, 'lineEdit_output')
-        self.lineEdit_output.setText(self.config['lineEdit_output'])
-        self.lineEdit_output.textChanged.connect(self.save_params)
-
-        toolButton_open_output1 = self.findChild(QToolButton, 'toolButton_open_output1')
-        toolButton_open_output1.clicked.connect(lambda: os.startfile(self.config['lineEdit_output1'].replace('/','\\')))
-
-        self.lineEdit_prefix = self.findChild(QLineEdit, 'lineEdit_prefix')
-        self.lineEdit_prefix.setText(self.config['lineEdit_prefix'])
-        self.lineEdit_prefix.textChanged.connect(self.save_params)
-
-        self.checkBox_copy = self.findChild(QCheckBox, 'checkBox_copy')
-        self.checkBox_copy.setChecked(self.config['checkBox_copy'])
-        self.checkBox_copy.stateChanged.connect(self.save_params)
-
-        self.lineEdit_output1 = self.findChild(QLineEdit, 'lineEdit_output1')
-        self.lineEdit_output1.setText(self.config['lineEdit_output1'])
-        self.lineEdit_output1.textChanged.connect(self.save_params)
-
-        self.lineEdit_prefix1 = self.findChild(QLineEdit, 'lineEdit_prefix1')
-        self.lineEdit_prefix1.setText(self.config['lineEdit_prefix1'])
-        self.lineEdit_prefix1.textChanged.connect(self.save_params)
-
-        self.checkBox_copy1 = self.findChild(QCheckBox, 'checkBox_copy1')
-        self.checkBox_copy1.setChecked(self.config['checkBox_copy1'])
-        self.checkBox_copy1.stateChanged.connect(self.save_params)
-
-        self.checkBox_first_page = self.findChild(QCheckBox, 'checkBox_first_page')
-        self.checkBox_first_page.setChecked(self.config['checkBox_first_page'])
-        self.checkBox_first_page.stateChanged.connect(self.save_params)
-
-        self.checkBox_last_page = self.findChild(QCheckBox, 'checkBox_last_page')
-        self.checkBox_last_page.setChecked(self.config['checkBox_last_page'])
-        self.checkBox_last_page.stateChanged.connect(self.save_params)
-
-        self.checkBox_all_pages = self.findChild(QCheckBox, 'checkBox_all_pages')
-        self.checkBox_all_pages.setChecked(self.config['checkBox_all_pages'])
-        self.checkBox_all_pages.stateChanged.connect(self.save_params)
-
-        self.lineEdit_chosen_pages = self.findChild(QLineEdit, 'lineEdit_chosen_pages')
-        self.lineEdit_chosen_pages.setText(self.config['lineEdit_chosen_pages'])
-        self.lineEdit_chosen_pages.textChanged.connect(self.save_params)
-
         self.comboBox_certs = self.findChild(QComboBox, 'comboBox_certs')
         self.cert_names = get_cert_data(os.path.join(self.config['csp_path'], 'certmgr.exe'))
         self.comboBox_certs.addItems(self.cert_names.keys())
         if config['comboBox_certs'] in self.cert_names:
             self.comboBox_certs.setCurrentText(config['comboBox_certs'])
         self.comboBox_certs.currentTextChanged.connect(self.save_params)
-
+        self.pushButton_editor = self.findChild(QPushButton, 'pushButton_editor')
+        self.pushButton_editor.clicked.connect(self.open_editor)
         self.pushButton = self.findChild(QPushButton, 'pushButton')
         self.pushButton.clicked.connect(self.agregate_folder)
 
@@ -93,7 +34,7 @@ class MainWindow(QMainWindow):
         self.frame_dropzone.dragEnterEvent = self.custom_drag_enter_event
         self.frame_dropzone.dropEvent = self.custom_drop_event
 
-        self.listWidget_filelist = self.findChild(QListWidget, 'listWidget_filelist')
+        self.tableWidget = self.findChild(QTableWidget, 'tableWidget')
         self.update_file_list()
         self.show()
 
@@ -107,7 +48,6 @@ class MainWindow(QMainWindow):
 
         if mime_data.hasUrls():
             file_paths = [url.toLocalFile() for url in mime_data.urls()]
-            # Ваш код для обработки нескольких файлов
             self.process_files(file_paths)
 
     def process_files(self, file_paths):
@@ -119,6 +59,14 @@ class MainWindow(QMainWindow):
                             os.path.isfile(fp) and not fp.endswith(('desktop.ini', 'swapfile.sys')) and is_file_locked(
                                 fp)]
         self.sign_documents(current_filelist)
+
+    def open_editor(self):
+        self.editor = EditorWindow(self.config)
+        res = self.editor.exec_()
+        if res:
+            self.config = self.editor.config
+            save_config(self.config)
+
 
     def sign_documents(self, documents_list):
         doc_signed_count = 0
@@ -170,18 +118,18 @@ class MainWindow(QMainWindow):
                                            f'Все файлы уже подписаны или не соответствуют подходящему формату.')
 
     def save_params(self):
-        self.config['comboBox_certs'] = self.comboBox_certs.currentText()
-        self.config['lineEdit_input'] = self.lineEdit_input.text()
-        self.config['lineEdit_prefix'] = self.lineEdit_prefix.text()
-        self.config['lineEdit_output'] = self.lineEdit_output.text()
-        self.config['checkBox_copy'] = self.checkBox_copy.isChecked()
-        self.config['lineEdit_output1'] = self.lineEdit_output1.text()
-        self.config['lineEdit_prefix1'] = self.lineEdit_prefix1.text()
-        self.config['checkBox_copy1'] = self.checkBox_copy1.isChecked()
-        self.config['checkBox_first_page'] = self.checkBox_first_page.isChecked()
-        self.config['checkBox_last_page'] = self.checkBox_last_page.isChecked()
-        self.config['checkBox_all_pages'] = self.checkBox_all_pages.isChecked()
-        self.config['lineEdit_chosen_pages'] = self.lineEdit_chosen_pages.text()
+        # self.config['comboBox_certs'] = self.comboBox_certs.currentText()
+        # self.config['lineEdit_input'] = self.lineEdit_input.text()
+        # self.config['lineEdit_prefix'] = self.lineEdit_prefix.text()
+        # self.config['lineEdit_output'] = self.lineEdit_output.text()
+        # self.config['checkBox_copy'] = self.checkBox_copy.isChecked()
+        # self.config['lineEdit_output1'] = self.lineEdit_output1.text()
+        # self.config['lineEdit_prefix1'] = self.lineEdit_prefix1.text()
+        # self.config['checkBox_copy1'] = self.checkBox_copy1.isChecked()
+        # self.config['checkBox_first_page'] = self.checkBox_first_page.isChecked()
+        # self.config['checkBox_last_page'] = self.checkBox_last_page.isChecked()
+        # self.config['checkBox_all_pages'] = self.checkBox_all_pages.isChecked()
+        # self.config['lineEdit_chosen_pages'] = self.lineEdit_chosen_pages.text()
         save_config(self.config)
 
     def set_user_dir(self, lineeditname):
@@ -204,11 +152,9 @@ class MainWindow(QMainWindow):
             current_filelist = glob(config['lineEdit_input'] + '/*')
             current_filelist = [fp for fp in current_filelist if fp.endswith('.pdf') and not os.path.exists(fp+'.sig')]
             new_filelist = [fp for fp in current_filelist if is_file_locked(fp)]
-            self.listWidget_filelist.clear()
             if new_filelist:
-                self.listWidget_filelist.clear()
                 for file_path in new_filelist:
-                    item = QListWidgetItem(self.listWidget_filelist)
+                    item = QListWidgetItem(self.tableWidget)
                     widget = QWidget()
                     layout = QHBoxLayout()
                     layout.setContentsMargins(3,3,3,3)
@@ -221,7 +167,7 @@ class MainWindow(QMainWindow):
                     layout.addWidget(sign_button)
                     widget.setLayout(layout)
                     item.setSizeHint(widget.sizeHint())
-                    self.listWidget_filelist.setItemWidget(item, widget)
+                    self.tableWidget.setItemWidget(item, widget)
 
 
 def DoubleClickEvent(file_path):
@@ -229,3 +175,4 @@ def DoubleClickEvent(file_path):
         temp_file_path = temp_file.name
         shutil.copyfile(file_path, temp_file_path)
         os.startfile(temp_file_path)
+
