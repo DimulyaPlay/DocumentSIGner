@@ -7,6 +7,7 @@ from PyQt5.QtGui import QIcon
 from PyQt5 import uic, QtCore
 from main_functions import *
 from editor_window import EditorWindow
+from connection_window import ConnectionWindow
 import tempfile
 
 
@@ -18,6 +19,10 @@ class MainWindow(QMainWindow):
         icon = QIcon("UI/icons8-legal-document-64.png")
         self.setWindowIcon(icon)
         self.config = config
+        if all([self.config['lineEdit_login'], self.config['lineEdit_password'], self.config['lineEdit_address']]):
+            self.session = login(self.config['lineEdit_login'], self.config['lineEdit_password'], self.config['lineEdit_address'])
+        else:
+            self.session = None
         self.comboBox_certs = self.findChild(QComboBox, 'comboBox_certs')
         self.cert_names = get_cert_data(os.path.join(self.config['csp_path'], 'certmgr.exe'))
         self.comboBox_certs.addItems(self.cert_names.keys())
@@ -29,8 +34,10 @@ class MainWindow(QMainWindow):
         self.pushButton = self.findChild(QPushButton, 'pushButton')
         self.pushButton.clicked.connect(self.agregate_folder)
 
+        self.pushButton_connection = self.findChild(QPushButton, 'pushButton_connection')
+        self.pushButton_connection.clicked.connect(self.open_connection)
+
         self.frame_dropzone = self.findChild(QFrame, 'frame_dropzone')
-        # Переназначение обработчиков событий
         self.frame_dropzone.dragEnterEvent = self.custom_drag_enter_event
         self.frame_dropzone.dropEvent = self.custom_drop_event
 
@@ -67,48 +74,52 @@ class MainWindow(QMainWindow):
             self.config = self.editor.config
             save_config(self.config)
 
+    def open_connection(self):
+        self.connection_window = ConnectionWindow(self.config)
+        res = self.connection_window.exec_()
+        if res:
+            self.config = self.connection_window.config
+            save_config(self.config)
 
     def sign_documents(self, documents_list):
         doc_signed_count = 0
         for doc in documents_list:
-            if doc.endswith('.pdf') and not os.path.exists(doc+'.sig'):
-                print(doc)
-                try:
-                    if any((check_chosen_pages(self.config['lineEdit_chosen_pages']), self.config['checkBox_first_page'], self.config['checkBox_last_page'], self.config['checkBox_all_pages'])):
-                        pagelist = []
-                        if self.config['checkBox_first_page']:
-                            pagelist.append(1)
-                        pagelist.extend(check_chosen_pages(self.config['lineEdit_chosen_pages']))
-                        if self.config['checkBox_last_page']:
-                            pagelist.append(-1)
-                        pagelist = list(set(pagelist))
-                        if self.config['checkBox_all_pages']:
-                            pagelist = 'all'
-                        doc = add_stamp(doc, self.comboBox_certs.currentText(), self.cert_names[self.comboBox_certs.currentText()], pagelist)
-                    doc_sig = sign_document(doc, self.cert_names[self.comboBox_certs.currentText()])
-                    if doc_sig == 1:
-                        self.show_failure_notification()
-                    if os.path.isfile(doc_sig):
-                        doc_signed_count += 1
-                        if self.config['checkBox_copy']:
-                            if self.config['lineEdit_prefix']:
-                                if os.path.basename(doc).startswith(self.config['lineEdit_prefix']):
-                                    shutil.copy(doc, self.config['lineEdit_output'])
-                                    shutil.copy(doc_sig, self.config['lineEdit_output'])
-                            else:
+            try:
+                if any((check_chosen_pages(self.config['lineEdit_chosen_pages']), self.config['checkBox_first_page'], self.config['checkBox_last_page'], self.config['checkBox_all_pages'])):
+                    pagelist = []
+                    if self.config['checkBox_first_page']:
+                        pagelist.append(1)
+                    pagelist.extend(check_chosen_pages(self.config['lineEdit_chosen_pages']))
+                    if self.config['checkBox_last_page']:
+                        pagelist.append(-1)
+                    pagelist = list(set(pagelist))
+                    if self.config['checkBox_all_pages']:
+                        pagelist = 'all'
+                    doc = add_stamp(doc, self.comboBox_certs.currentText(), self.cert_names[self.comboBox_certs.currentText()], pagelist)
+                doc_sig = sign_document(doc, self.cert_names[self.comboBox_certs.currentText()])
+                if doc_sig == 1:
+                    self.show_failure_notification()
+                if os.path.isfile(doc_sig):
+                    doc_signed_count += 1
+                    if self.config['checkBox_copy']:
+                        if self.config['lineEdit_prefix']:
+                            if os.path.basename(doc).startswith(self.config['lineEdit_prefix']):
                                 shutil.copy(doc, self.config['lineEdit_output'])
                                 shutil.copy(doc_sig, self.config['lineEdit_output'])
-                        if self.config['checkBox_copy1']:
-                            if self.config['lineEdit_prefix1']:
-                                if os.path.basename(doc).startswith(self.config['lineEdit_prefix1']):
-                                    shutil.copy(doc, self.config['lineEdit_output1'])
-                                    shutil.copy(doc_sig, self.config['lineEdit_output1'])
-                            else:
+                        else:
+                            shutil.copy(doc, self.config['lineEdit_output'])
+                            shutil.copy(doc_sig, self.config['lineEdit_output'])
+                    if self.config['checkBox_copy1']:
+                        if self.config['lineEdit_prefix1']:
+                            if os.path.basename(doc).startswith(self.config['lineEdit_prefix1']):
                                 shutil.copy(doc, self.config['lineEdit_output1'])
                                 shutil.copy(doc_sig, self.config['lineEdit_output1'])
-                except:
-                    traceback.print_exc()
-                    self.show_failure_notification()
+                        else:
+                            shutil.copy(doc, self.config['lineEdit_output1'])
+                            shutil.copy(doc_sig, self.config['lineEdit_output1'])
+            except:
+                traceback.print_exc()
+                self.show_failure_notification()
             else:
                 continue
         if doc_signed_count > 0:
@@ -118,18 +129,6 @@ class MainWindow(QMainWindow):
                                            f'Все файлы уже подписаны или не соответствуют подходящему формату.')
 
     def save_params(self):
-        # self.config['comboBox_certs'] = self.comboBox_certs.currentText()
-        # self.config['lineEdit_input'] = self.lineEdit_input.text()
-        # self.config['lineEdit_prefix'] = self.lineEdit_prefix.text()
-        # self.config['lineEdit_output'] = self.lineEdit_output.text()
-        # self.config['checkBox_copy'] = self.checkBox_copy.isChecked()
-        # self.config['lineEdit_output1'] = self.lineEdit_output1.text()
-        # self.config['lineEdit_prefix1'] = self.lineEdit_prefix1.text()
-        # self.config['checkBox_copy1'] = self.checkBox_copy1.isChecked()
-        # self.config['checkBox_first_page'] = self.checkBox_first_page.isChecked()
-        # self.config['checkBox_last_page'] = self.checkBox_last_page.isChecked()
-        # self.config['checkBox_all_pages'] = self.checkBox_all_pages.isChecked()
-        # self.config['lineEdit_chosen_pages'] = self.lineEdit_chosen_pages.text()
         save_config(self.config)
 
     def set_user_dir(self, lineeditname):
@@ -148,26 +147,7 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, 'Ошибка', 'Ошибка при обработке файлов')
 
     def update_file_list(self):
-        if config['lineEdit_input']:
-            current_filelist = glob(config['lineEdit_input'] + '/*')
-            current_filelist = [fp for fp in current_filelist if fp.endswith('.pdf') and not os.path.exists(fp+'.sig')]
-            new_filelist = [fp for fp in current_filelist if is_file_locked(fp)]
-            if new_filelist:
-                for file_path in new_filelist:
-                    item = QListWidgetItem(self.tableWidget)
-                    widget = QWidget()
-                    layout = QHBoxLayout()
-                    layout.setContentsMargins(3,3,3,3)
-                    file_name_label = QLabel(os.path.basename(file_path))
-                    file_name_label.mouseDoubleClickEvent = lambda _, file=file_path: DoubleClickEvent(file)
-                    layout.addWidget(file_name_label)
-                    sign_button = QPushButton('Подписать')
-                    sign_button.setMaximumWidth(72)
-                    sign_button.clicked.connect(lambda _, file=file_path: self.sign_documents([file]))
-                    layout.addWidget(sign_button)
-                    widget.setLayout(layout)
-                    item.setSizeHint(widget.sizeHint())
-                    self.tableWidget.setItemWidget(item, widget)
+        get_filelist(self.session, self.config['lineEdit_address'])
 
 
 def DoubleClickEvent(file_path):

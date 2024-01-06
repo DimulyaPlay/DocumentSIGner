@@ -27,7 +27,6 @@ class EditorWindow(QDialog):
         self.pushButton_del_filter = self.findChild(QPushButton, 'pushButton_del_filter')
         self.pushButton_del_filter.clicked.connect(lambda: self.removeSel('listWidget_filters'))
 
-
     def set_user_dir(self, listWidget_name):
         options = QFileDialog.Options()
         options |= QFileDialog.ShowDirsOnly

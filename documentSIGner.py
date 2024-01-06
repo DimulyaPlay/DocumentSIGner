@@ -16,5 +16,3 @@ if __name__ == '__main__':
         app.exec_()
     except:
         traceback.print_exc()
-
-

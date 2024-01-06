@@ -9,6 +9,7 @@ import re
 import sys
 from PIL import Image, ImageDraw, ImageFont
 import fitz
+import requests
 
 
 config_path = os.path.dirname(sys.argv[0])
@@ -24,17 +25,10 @@ date_exp = ('Истекает',)
 def read_create_config(config_file):
     default_configuration = {
         'comboBox_certs': 'Сертификат не выбран',
-        "lineEdit_input": "",
-        "lineEdit_output": "",
-        'lineEdit_prefix': '',
-        "checkBox_copy": False,
-        "lineEdit_output1": "",
-        'lineEdit_prefix1': '',
-        "checkBox_copy1": False,
-        "checkBox_first_page": True,
-        "checkBox_last_page": True,
-        "checkBox_all_pages": False,
-        "lineEdit_chosen_pages": "",
+        'lineEdit_address': '127.0.0.1:5000',
+        'lineEdit_login': '',
+        'lineEdit_password': '',
+        'rules': {},
         "csp_path": r"C:\Program Files\Crypto Pro\CSP"
     }
     if os.path.exists(config_file):
@@ -214,3 +208,28 @@ def add_stamp_to_pages(pdf_path, modified_stamp_path, pagelist):
             doc[page_index].insert_image(img_rect, pixmap=img_stamp)
     doc.saveIncr()
     return pdf_path
+
+
+def login(username, password, address):
+    try:
+        login_url = f'http://{address}/login'
+        session = requests.Session()
+        login_payload = {'first_name': username, 'password': password, 'lite': True}
+        login_response = session.post(login_url, data=login_payload)
+        if login_response.status_code == 200:
+            print('login success')
+            return session
+        else:
+            print('login failed')
+            return None
+    except:
+        print('connection failed')
+        traceback.print_exc()
+        return None
+
+
+
+def get_filelist(session, address):
+    filelist_url = f'http://{address}/get_judge_filelist'
+    filelist_response = session.get(filelist_url)
+    return filelist_response.json()
