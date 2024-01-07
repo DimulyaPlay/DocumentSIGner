@@ -10,6 +10,7 @@ import sys
 from PIL import Image, ImageDraw, ImageFont
 import fitz
 import requests
+import tempfile
 
 
 config_path = os.path.dirname(sys.argv[0])
@@ -193,7 +194,9 @@ def add_stamp_to_pages(pdf_path, modified_stamp_path, pagelist):
             img_rect = fitz.Rect(x0, y0, x1, y1)
             page.insert_image(img_rect, pixmap=img_stamp)
     else:
+        pagelist = pagelist.split(',')
         for page in pagelist:
+            page = int(page)
             page_index = page-1
             if page == -1:
                 page_index = -1
@@ -210,26 +213,56 @@ def add_stamp_to_pages(pdf_path, modified_stamp_path, pagelist):
     return pdf_path
 
 
-def login(username, password, address):
-    try:
-        login_url = f'http://{address}/login'
-        session = requests.Session()
-        login_payload = {'first_name': username, 'password': password, 'lite': True}
-        login_response = session.post(login_url, data=login_payload)
-        if login_response.status_code == 200:
-            print('login success')
-            return session
-        else:
-            print('login failed')
+class Connection:
+    def __init__(self, username, password, address):
+        self.username = username
+        self.password = password
+        self.address = address
+        self.session = self.login()
+
+    def login(self):
+        try:
+            login_url = f'http://{self.address}/login'
+            session = requests.Session()
+            login_payload = {'first_name': self.username, 'password': self.password, 'lite': True}
+            login_response = session.post(login_url, data=login_payload)
+            if login_response.status_code == 200:
+                print('login success')
+                return session
+            else:
+                print('login failed')
+                return None
+        except:
+            print('connection failed')
+            traceback.print_exc()
             return None
-    except:
-        print('connection failed')
-        traceback.print_exc()
-        return None
 
+    def get_filelist(self):
+        if not self.session:
+            return None
+        filelist_url = f'http://{self.address}/get_judge_filelist'
+        filelist_response = self.session.get(filelist_url)
+        return filelist_response.json()
 
+    def download_file(self, file_id):
+        download_url = f'http://{self.address}/download_file/{file_id}'
+        download_response = self.session.get(download_url)
+        if download_response.status_code == 200:
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
+                temp_file_path = temp_file.name
+                temp_file.write(download_response.content)
+            return temp_file_path
+        else:
+            return None
+            print(f"Error downloading file with ID {file_id}")
 
-def get_filelist(session, address):
-    filelist_url = f'http://{address}/get_judge_filelist'
-    filelist_response = session.get(filelist_url)
-    return filelist_response.json()
+    def set_file_signed(self, file_id, pdf_file_path, sig_file_path):
+        if not self.session:
+            return None
+        files = {'pdf_file': open(pdf_file_path, 'rb'), 'sig_file': open(sig_file_path, 'rb')}
+        signed_url = f'http://{self.address}/set_file_signed/{file_id}'
+        signed_response = self.session.post(signed_url, files=files)
+        if signed_response.status_code == 200:
+            return True
+        else:
+            return False

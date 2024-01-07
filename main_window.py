@@ -1,10 +1,10 @@
 import sys
 import os
 import traceback
-from PyQt5.QtWidgets import QMainWindow, QLabel, QLineEdit, QCheckBox, QComboBox, QToolButton, QFileDialog,\
-    QPushButton, QFrame, QMessageBox, QListWidget, QListWidgetItem, QWidget, QHBoxLayout, QTableWidget, QDialog, QInputDialog
+from PyQt5.QtWidgets import QMainWindow, QLineEdit, QComboBox, QFileDialog,\
+    QPushButton, QFrame, QMessageBox, QTableWidget, QTableWidgetItem
 from PyQt5.QtGui import QIcon
-from PyQt5 import uic, QtCore
+from PyQt5 import uic, Qt
 from main_functions import *
 from editor_window import EditorWindow
 from connection_window import ConnectionWindow
@@ -20,7 +20,7 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(icon)
         self.config = config
         if all([self.config['lineEdit_login'], self.config['lineEdit_password'], self.config['lineEdit_address']]):
-            self.session = login(self.config['lineEdit_login'], self.config['lineEdit_password'], self.config['lineEdit_address'])
+            self.session = Connection(self.config['lineEdit_login'], self.config['lineEdit_password'], self.config['lineEdit_address'])
         else:
             self.session = None
         self.comboBox_certs = self.findChild(QComboBox, 'comboBox_certs')
@@ -31,8 +31,6 @@ class MainWindow(QMainWindow):
         self.comboBox_certs.currentTextChanged.connect(self.save_params)
         self.pushButton_editor = self.findChild(QPushButton, 'pushButton_editor')
         self.pushButton_editor.clicked.connect(self.open_editor)
-        self.pushButton = self.findChild(QPushButton, 'pushButton')
-        self.pushButton.clicked.connect(self.agregate_folder)
 
         self.pushButton_connection = self.findChild(QPushButton, 'pushButton_connection')
         self.pushButton_connection.clicked.connect(self.open_connection)
@@ -42,6 +40,10 @@ class MainWindow(QMainWindow):
         self.frame_dropzone.dropEvent = self.custom_drop_event
 
         self.tableWidget = self.findChild(QTableWidget, 'tableWidget')
+        self.tableWidget.doubleClicked.connect(lambda item: self.double_click_handler(item))
+        self.tableWidget.setContentsMargins(3, 3, 3, 3)
+        self.tableWidget.setColumnWidth(0, 300)
+        self.tableWidget.setColumnWidth(1, 100)
         self.update_file_list()
         self.show()
 
@@ -81,53 +83,6 @@ class MainWindow(QMainWindow):
             self.config = self.connection_window.config
             save_config(self.config)
 
-    def sign_documents(self, documents_list):
-        doc_signed_count = 0
-        for doc in documents_list:
-            try:
-                if any((check_chosen_pages(self.config['lineEdit_chosen_pages']), self.config['checkBox_first_page'], self.config['checkBox_last_page'], self.config['checkBox_all_pages'])):
-                    pagelist = []
-                    if self.config['checkBox_first_page']:
-                        pagelist.append(1)
-                    pagelist.extend(check_chosen_pages(self.config['lineEdit_chosen_pages']))
-                    if self.config['checkBox_last_page']:
-                        pagelist.append(-1)
-                    pagelist = list(set(pagelist))
-                    if self.config['checkBox_all_pages']:
-                        pagelist = 'all'
-                    doc = add_stamp(doc, self.comboBox_certs.currentText(), self.cert_names[self.comboBox_certs.currentText()], pagelist)
-                doc_sig = sign_document(doc, self.cert_names[self.comboBox_certs.currentText()])
-                if doc_sig == 1:
-                    self.show_failure_notification()
-                if os.path.isfile(doc_sig):
-                    doc_signed_count += 1
-                    if self.config['checkBox_copy']:
-                        if self.config['lineEdit_prefix']:
-                            if os.path.basename(doc).startswith(self.config['lineEdit_prefix']):
-                                shutil.copy(doc, self.config['lineEdit_output'])
-                                shutil.copy(doc_sig, self.config['lineEdit_output'])
-                        else:
-                            shutil.copy(doc, self.config['lineEdit_output'])
-                            shutil.copy(doc_sig, self.config['lineEdit_output'])
-                    if self.config['checkBox_copy1']:
-                        if self.config['lineEdit_prefix1']:
-                            if os.path.basename(doc).startswith(self.config['lineEdit_prefix1']):
-                                shutil.copy(doc, self.config['lineEdit_output1'])
-                                shutil.copy(doc_sig, self.config['lineEdit_output1'])
-                        else:
-                            shutil.copy(doc, self.config['lineEdit_output1'])
-                            shutil.copy(doc_sig, self.config['lineEdit_output1'])
-            except:
-                traceback.print_exc()
-                self.show_failure_notification()
-            else:
-                continue
-        if doc_signed_count > 0:
-            self.show_success_notification(f'Подписано {doc_signed_count} документов')
-        else:
-            self.show_success_notification(f'Подходящие документы не обнаружены. '
-                                           f'Все файлы уже подписаны или не соответствуют подходящему формату.')
-
     def save_params(self):
         save_config(self.config)
 
@@ -147,7 +102,53 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, 'Ошибка', 'Ошибка при обработке файлов')
 
     def update_file_list(self):
-        get_filelist(self.session, self.config['lineEdit_address'])
+        if self.session:
+            file_list = self.session.get_filelist()
+            self.tableWidget.setRowCount(0)
+            for file_id, file_data in file_list.items():
+                row_position = self.tableWidget.rowCount()
+                self.tableWidget.insertRow(row_position)
+                item = QTableWidgetItem(file_data['fileName'])
+                item.setData(Qt.Qt.UserRole, file_data['id'])  # Сохранение полного пути в пользовательском атрибуте
+                self.tableWidget.setItem(row_position, 0, item)
+                sign_button = QPushButton('Подписать', self)
+                sign_button.clicked.connect(lambda _, idx=file_data['id'], pages=file_data['sigPages']: self.sign_file(
+                    idx, pages))
+                self.tableWidget.setCellWidget(row_position, 1, sign_button)
+
+    def sign_file(self, idx, pages):
+        try:
+            try:
+                fpath = self.session.download_file(idx)
+            except:
+                traceback.print_exc()
+                self.show_failure_notification()
+                return
+            if pages:
+                fpath = add_stamp(fpath, self.comboBox_certs.currentText(), self.cert_names[self.comboBox_certs.currentText()], pages)
+            doc_sig = sign_document(fpath, self.cert_names[self.comboBox_certs.currentText()])
+            if doc_sig == 1:
+                self.show_failure_notification()
+            if os.path.isfile(doc_sig):
+                res = self.session.set_file_signed(idx, fpath, doc_sig)
+                if res:
+                    self.show_success_notification(f'Документ подписан')
+                else:
+                    self.show_failure_notification()
+                    return
+        except:
+            traceback.print_exc()
+            self.show_failure_notification()
+            return
+
+    def double_click_handler(self, item):
+        if item.column() == 0:
+            file_id = item.data(Qt.Qt.UserRole)
+            try:
+                fpath = self.session.download_file(file_id)
+                os.startfile(fpath)
+            except:
+                traceback.print_exc()
 
 
 def DoubleClickEvent(file_path):
