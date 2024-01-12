@@ -224,6 +224,7 @@ class Connection:
         try:
             login_url = f'http://{self.address}/login'
             session = requests.Session()
+            session.trust_env = False
             login_payload = {'first_name': self.username, 'password': self.password, 'lite': True}
             login_response = session.post(login_url, data=login_payload)
             if login_response.status_code == 200:

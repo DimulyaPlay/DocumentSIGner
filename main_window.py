@@ -105,16 +105,17 @@ class MainWindow(QMainWindow):
         if self.session:
             file_list = self.session.get_filelist()
             self.tableWidget.setRowCount(0)
-            for file_id, file_data in file_list.items():
-                row_position = self.tableWidget.rowCount()
-                self.tableWidget.insertRow(row_position)
-                item = QTableWidgetItem(file_data['fileName'])
-                item.setData(Qt.Qt.UserRole, file_data['id'])  # Сохранение полного пути в пользовательском атрибуте
-                self.tableWidget.setItem(row_position, 0, item)
-                sign_button = QPushButton('Подписать', self)
-                sign_button.clicked.connect(lambda _, idx=file_data['id'], pages=file_data['sigPages']: self.sign_file(
-                    idx, pages))
-                self.tableWidget.setCellWidget(row_position, 1, sign_button)
+            if file_list:
+                for file_id, file_data in file_list.items():
+                    row_position = self.tableWidget.rowCount()
+                    self.tableWidget.insertRow(row_position)
+                    item = QTableWidgetItem(file_data['fileName'])
+                    item.setData(Qt.Qt.UserRole, file_data['id'])
+                    self.tableWidget.setItem(row_position, 0, item)
+                    sign_button = QPushButton('Подписать', self)
+                    sign_button.clicked.connect(lambda _, idx=file_data['id'], pages=file_data['sigPages']: self.sign_file(
+                        idx, pages))
+                    self.tableWidget.setCellWidget(row_position, 1, sign_button)
 
     def sign_file(self, idx, pages):
         try:
