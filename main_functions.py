@@ -18,18 +18,14 @@ if not os.path.exists(config_path):
     os.mkdir(config_path)
 config_file = os.path.join(config_path, 'config.json')
 
-fingerprint_names = ('Серийный номер',)
-date_make = ('Выдан',)
-date_exp = ('Истекает',)
+serial_names = ('Серийный номер','Serial')
+date_make = ('Выдан','Not valid before')
+date_exp = ('Истекает','Not valid after')
 
 
 def read_create_config(config_file):
     default_configuration = {
-        'comboBox_certs': 'Сертификат не выбран',
-        'lineEdit_address': '127.0.0.1:5000',
-        'lineEdit_login': '',
-        'lineEdit_password': '',
-        'rules': {},
+        'host_address': '127.0.0.1:4999',
         "csp_path": r"C:\Program Files\Crypto Pro\CSP"
     }
     if os.path.exists(config_file):
@@ -50,15 +46,6 @@ def read_create_config(config_file):
 
 
 config = read_create_config(config_file)
-
-
-def save_config(config):
-    try:
-        with open(config_file, 'w') as json_file:
-            json.dump(config, json_file)
-        config = read_create_config(config_file)
-    except:
-        traceback.print_exc()
 
 
 def get_cert_data(cert_mgr_path):
@@ -82,15 +69,6 @@ def get_cert_data(cert_mgr_path):
         return certs_data
     else:
         return {}
-
-
-def is_file_locked(filepath):
-    try:
-        file_handle = open(filepath, 'a')
-        msvcrt.locking(file_handle.fileno(), msvcrt.LK_NBLCK, 1)
-        return True
-    except:
-        return False
 
 
 def sign_document(s_source_file, cert_data):
@@ -152,8 +130,8 @@ def add_stamp(doc_path, cert_name, cert_info, pagelist):
     """
     template_png_path = os.path.join(os.path.dirname(sys.argv[0]), 'dcs.png')
     fingerprint = cert_info.get('Серийный номер', cert_info.get('Serial', ' '))
-    create_date = cert_info.get('Выдан', cert_info.get('Not valid before', ' '))
-    exp_date = cert_info.get('Истекает', cert_info.get('Not valid after', ' '))
+    create_date = cert_info.get('Выдан', cert_info.get('Not valid before', ' '))[:10].replace('/','.')
+    exp_date = cert_info.get('Истекает', cert_info.get('Not valid after', ' '))[:10].replace('/','.')
     stamp_path = add_text_to_stamp(template_png_path, cert_name, fingerprint, create_date, exp_date)
     stamped_doc = add_stamp_to_pages(doc_path, stamp_path, pagelist)
     return stamped_doc
@@ -163,17 +141,17 @@ def add_text_to_stamp(template_path, cert_name, fingerprint, create_date, exp_da
     template_image = Image.open(template_path)
     draw = ImageDraw.Draw(template_image)
     font_path = 'times.ttf'
-    font = ImageFont.truetype(font_path, 22)
+    font = ImageFont.truetype(font_path, 24)
     text_positions = {
         'cert_name': (20, 145),
         'fingerprint': (20, 175),
         'create_date': (20, 205),
-        'exp_date': (20, 235),
+        'exp_date': (50, 205),
     }
     draw.text(text_positions['cert_name'], "Владелец сертификата: " + cert_name, fill='blue', font=font)
     draw.text(text_positions['fingerprint'], "Сертификат: " + fingerprint[2:], fill='blue', font=font)
-    draw.text(text_positions['create_date'], "Действителен с: " + create_date, fill='blue', font=font)
-    draw.text(text_positions['exp_date'], "Действителен по: " + exp_date, fill='blue', font=font)
+    draw.text(text_positions['create_date'], "Действителен: с " + create_date, fill='blue', font=font)
+    draw.text(text_positions['exp_date'], exp_date, fill='blue', font=font)
     modified_image_path = "modified_stamp.png"
     template_image.save(modified_image_path)
     return modified_image_path
@@ -211,59 +189,3 @@ def add_stamp_to_pages(pdf_path, modified_stamp_path, pagelist):
             doc[page_index].insert_image(img_rect, pixmap=img_stamp)
     doc.saveIncr()
     return pdf_path
-
-
-class Connection:
-    def __init__(self, username, password, address):
-        self.username = username
-        self.password = password
-        self.address = address
-        self.session = self.login()
-
-    def login(self):
-        try:
-            login_url = f'http://{self.address}/login'
-            session = requests.Session()
-            session.trust_env = False
-            login_payload = {'first_name': self.username, 'password': self.password, 'lite': True}
-            login_response = session.post(login_url, data=login_payload)
-            if login_response.status_code == 200:
-                print('login success')
-                return session
-            else:
-                print('login failed')
-                return None
-        except:
-            print('connection failed')
-            traceback.print_exc()
-            return None
-
-    def get_filelist(self):
-        if not self.session:
-            return None
-        filelist_url = f'http://{self.address}/get_judge_filelist'
-        filelist_response = self.session.get(filelist_url)
-        return filelist_response.json()
-
-    def download_file(self, file_id):
-        download_url = f'http://{self.address}/download_file/{file_id}'
-        download_response = self.session.get(download_url)
-        if download_response.status_code == 200:
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
-                temp_file_path = temp_file.name
-                temp_file.write(download_response.content)
-            return temp_file_path
-        else:
-            return None
-            print(f"Error downloading file with ID {file_id}")
-
-    def set_file_signed(self, file_id, pdf_file_path, sig_file_path):
-        if not self.session:
-            return None
-        files = {'pdf_file': open(pdf_file_path, 'rb'), 'sig_file': open(sig_file_path, 'rb')}
-        signed_url = f'http://{self.address}/set_file_signed/{file_id}'
-        signed_response = self.session.post(signed_url, files=files)
-        if signed_response.status_code == 200:
-            return True
-        else:
-            return False
