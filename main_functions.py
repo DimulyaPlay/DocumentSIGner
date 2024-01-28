@@ -8,41 +8,41 @@ import subprocess
 import re
 import sys
 from PIL import Image, ImageDraw, ImageFont
-import fitz
 import requests
 import tempfile
 
 
-config_path = os.path.dirname(sys.argv[0])
-if not os.path.exists(config_path):
-    os.mkdir(config_path)
-config_file = os.path.join(config_path, 'config.json')
+config_folder = os.path.dirname(sys.argv[0])
+if not os.path.exists(config_folder):
+    os.mkdir(config_folder)
+config_file = os.path.join(config_folder, 'config.json')
 
-serial_names = ('Серийный номер','Serial')
-date_make = ('Выдан','Not valid before')
-date_exp = ('Истекает','Not valid after')
+serial_names = ('Серийный номер', 'Serial')
+date_make = ('Выдан', 'Not valid before')
+date_exp = ('Истекает', 'Not valid after')
 
 
-def read_create_config(config_file):
+def read_create_config(config_path):
     default_configuration = {
-        'host_address': '127.0.0.1:4999',
-        "csp_path": r"C:\Program Files\Crypto Pro\CSP"
+        'port': '4999',
+        "csp_path": r"C:\Program Files\Crypto Pro\CSP",
+        'last_cert': ''
     }
-    if os.path.exists(config_file):
+    if os.path.exists(config_path):
         try:
-            with open(config_file, 'r') as configfile:
-                config = json.load(configfile)
+            with open(config_path, 'r') as configfile:
+                configuration = json.load(configfile)
         except Exception as e:
             print(e)
-            os.remove(config_file)
-            config = default_configuration
-            with open(config_file, 'w') as configfile:
-                json.dump(config, configfile)
+            os.remove(config_path)
+            configuration = default_configuration
+            with open(config_path, 'w') as configfile:
+                json.dump(configuration, configfile)
     else:
-        config = default_configuration
-        with open(config_file, 'w') as configfile:
-            json.dump(config, configfile)
-    return config
+        configuration = default_configuration
+        with open(config_path, 'w') as configfile:
+            json.dump(configuration, configfile)
+    return configuration
 
 
 config = read_create_config(config_file)
@@ -52,7 +52,11 @@ def get_cert_data(cert_mgr_path):
     if os.path.exists(cert_mgr_path):
         certs_data = {}
         try:
-            result = subprocess.run([cert_mgr_path, '-list'], capture_output=True, text=True, check=True, encoding='cp866', creationflags=subprocess.CREATE_NO_WINDOW)
+            result = subprocess.run([cert_mgr_path, '-list'],
+                                    capture_output=True,
+                                    text=True, check=True,
+                                    encoding='cp866',
+                                    creationflags=subprocess.CREATE_NO_WINDOW)
             output = result.stdout
             for i in output.split('-------')[1:]:
                 rows = i.split('\n')
