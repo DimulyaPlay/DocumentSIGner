@@ -10,6 +10,7 @@ import sys
 from PIL import Image, ImageDraw, ImageFont
 import requests
 import tempfile
+import fitz
 
 
 config_folder = os.path.dirname(sys.argv[0])
@@ -148,14 +149,15 @@ def add_text_to_stamp(template_path, cert_name, fingerprint, create_date, exp_da
     font = ImageFont.truetype(font_path, 24)
     text_positions = {
         'cert_name': (20, 145),
-        'fingerprint': (20, 175),
-        'create_date': (20, 205),
-        'exp_date': (50, 205),
+        'fingerprint': (20, 185),
+        'create_date': (20, 225),
     }
-    draw.text(text_positions['cert_name'], "Владелец сертификата: " + cert_name, fill='blue', font=font)
-    draw.text(text_positions['fingerprint'], "Сертификат: " + fingerprint[2:], fill='blue', font=font)
-    draw.text(text_positions['create_date'], "Действителен: с " + create_date, fill='blue', font=font)
-    draw.text(text_positions['exp_date'], exp_date, fill='blue', font=font)
+    draw.text(text_positions['cert_name'], "Владелец:", fill='blue', font=font)
+    draw.text(text_positions['cert_name'], "                          " + cert_name, fill='blue', font=font)
+    draw.text(text_positions['fingerprint'], "Сертификат:", fill='blue', font=font)
+    draw.text(text_positions['fingerprint'], "                          " + fingerprint[2:], fill='blue', font=font)
+    draw.text(text_positions['create_date'], "Действителен:", fill='blue', font=font)
+    draw.text(text_positions['create_date'], "                          " + f"c {create_date} по {exp_date}", fill='blue', font=font)
     modified_image_path = "modified_stamp.png"
     template_image.save(modified_image_path)
     return modified_image_path
@@ -176,7 +178,7 @@ def add_stamp_to_pages(pdf_path, modified_stamp_path, pagelist):
             img_rect = fitz.Rect(x0, y0, x1, y1)
             page.insert_image(img_rect, pixmap=img_stamp)
     else:
-        pagelist = pagelist.split(',')
+        print(pagelist)
         for page in pagelist:
             page = int(page)
             page_index = page-1
