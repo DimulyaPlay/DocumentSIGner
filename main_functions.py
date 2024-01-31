@@ -178,7 +178,6 @@ def add_stamp_to_pages(pdf_path, modified_stamp_path, pagelist):
             img_rect = fitz.Rect(x0, y0, x1, y1)
             page.insert_image(img_rect, pixmap=img_stamp)
     else:
-        print(pagelist)
         for page in pagelist:
             page = int(page)
             page_index = page-1
