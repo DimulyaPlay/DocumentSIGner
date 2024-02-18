@@ -1,5 +1,6 @@
 from main_functions import *
 import os
+import sys
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -14,6 +15,19 @@ import time
 app = Flask(__name__)
 CORS(app)
 
+
+def exception_hook(exc_type, exc_value, exc_traceback):
+    """
+    Функция для перехвата исключений и отображения диалогового окна с ошибкой.
+    """
+    error_msg = ''.join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+    error_dialog = QtWidgets.QErrorMessage()
+    error_dialog.showMessage(error_msg)
+    error_dialog.exec_()
+    sys.__excepthook__(exc_type, exc_value, exc_traceback)
+
+
+sys.excepthook = exception_hook
 certs_data = get_cert_data(os.path.join(config['csp_path'], 'certmgr.exe'))
 
 if os.path.exists('./confirmations'):
