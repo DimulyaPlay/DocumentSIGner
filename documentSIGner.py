@@ -1,6 +1,4 @@
 from main_functions import *
-import os
-import sys
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -11,9 +9,15 @@ from PyQt5.QtCore import QTranslator, QLocale, QLibraryInfo
 from threading import Thread
 from glob import glob
 import time
+import logging
 
 app = Flask(__name__)
 CORS(app)
+# pyinstaller --onefile --windowed C:\Users\CourtUser\Desktop\release\DocumentSIGner\documentSIGner.py
+
+logging.getLogger("PyQt5").setLevel(logging.WARNING)
+log_path = os.path.join(os.path.dirname(sys.argv[0]), 'log.log')
+logging.basicConfig(filename=log_path, level=logging.ERROR)
 
 
 def exception_hook(exc_type, exc_value, exc_traceback):
@@ -25,6 +29,7 @@ def exception_hook(exc_type, exc_value, exc_traceback):
     error_dialog.showMessage(error_msg)
     error_dialog.exec_()
     sys.__excepthook__(exc_type, exc_value, exc_traceback)
+
 
 
 sys.excepthook = exception_hook
@@ -61,7 +66,7 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
 
     def confirm_signing(self, file_name):
         msg_box = QtWidgets.QMessageBox()
-        msg_box.setWindowIcon(QtGui.QIcon('icons8-legal-document-64.ico'))
+        msg_box.setWindowIcon(QtGui.QIcon(resource_path('icons8-legal-document-64.ico')))
         msg_box.setIcon(QtWidgets.QMessageBox.Question)
         msg_box.setWindowTitle("Получен запрос на подпись.")
         msg_box.setText(f"Вы хотите подписать файл {file_name}?")
@@ -152,7 +157,7 @@ def main():
     thread.daemon = True
     thread.start()
     global tray_gui
-    tray_gui = SystemTrayGui(QtGui.QIcon('icons8-legal-document-64.ico'))
+    tray_gui = SystemTrayGui(QtGui.QIcon(resource_path('icons8-legal-document-64.ico')))
     tray_gui.show()
     sys.exit(app.exec_())
 

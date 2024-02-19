@@ -194,3 +194,13 @@ def add_stamp_to_pages(pdf_path, modified_stamp_path, pagelist):
             doc[page_index].insert_image(img_rect, pixmap=img_stamp)
     doc.saveIncr()
     return pdf_path
+
+def resource_path(relative_path):
+    """ Возвращает корректный путь для доступа к ресурсам для PyInstaller """
+    try:
+        # PyInstaller создает временную папку и устанавливает переменную _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
