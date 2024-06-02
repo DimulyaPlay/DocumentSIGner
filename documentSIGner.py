@@ -1,3 +1,5 @@
+import shutil
+
 from main_functions import *
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
@@ -53,7 +55,7 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.setContextMenu(menu)
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self.check_for_sign_requests)
-        self.timer.start(500)  # Проверка каждую секунду
+        self.timer.start(1000)  # Проверка каждую секунду
 
     def check_for_sign_requests(self):
         for file_path in glob("confirmations/waiting_*"):
@@ -119,11 +121,13 @@ def sign_file():
             return jsonify({'error': True, 'message': message})
         fd, filepath_to_sign = tempfile.mkstemp(f'.{file_type}')
         os.close(fd)
+        filepath_to_stamp = os.path.join(os.path.dirname(filepath_to_sign), f'gf_{os.path.basename(filepath_to_sign)}')
         file_to_sign.save(filepath_to_sign)
+        shutil.copy(filepath_to_sign, filepath_to_stamp)
         if file_type and sig_pages:
             pages = check_chosen_pages(sig_pages)
             if pages:
-                filepath_to_sign = add_stamp(filepath_to_sign, selected_cert, certs_data[selected_cert], pages)
+                filepath_to_stamp = add_stamp(filepath_to_stamp, selected_cert, certs_data[selected_cert], pages)
         filepath_sig = sign_document(filepath_to_sign, certs_data[selected_cert])
         if os.path.isfile(filepath_sig):
             fd, zip_to_send = tempfile.mkstemp(f'.zip')
@@ -131,6 +135,7 @@ def sign_file():
             with zipfile.ZipFile(zip_to_send, 'w') as zipf:
                 zipf.write(filepath_to_sign, os.path.basename(filepath_to_sign))
                 zipf.write(filepath_sig, os.path.basename(filepath_sig))
+                zipf.write(filepath_to_stamp, os.path.basename(filepath_to_stamp))
             return send_file(zip_to_send, as_attachment=True)
         else:
             message = 'Не удалось подписать документ'
@@ -140,8 +145,9 @@ def sign_file():
         message = f'Не удалось подписать документ: {e}'
         return jsonify({'error': True, 'message': message})
 
+
 def run_flask():
-    app.run(debug=True, port=config['port'], use_reloader=False)
+    app.run(host="127.0.0.1", port=config['port'], use_reloader=False)
 
 
 def main():
