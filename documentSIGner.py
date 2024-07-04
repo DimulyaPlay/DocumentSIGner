@@ -15,7 +15,7 @@ import logging
 
 app = Flask(__name__)
 CORS(app)
-# pyinstaller --onefile --windowed C:\Users\CourtUser\Desktop\release\DocumentSIGner\documentSIGner.py
+# C:\Users\CourtUser\Desktop\release\DocumentSIGner\venv\Scripts\pyinstaller.exe --windowed --icon "C:\Users\CourtUser\Desktop\release\DocumentSIGner\icons8-legal-document-64.ico" --add-data "C:\Users\CourtUser\Desktop\release\DocumentSIGner\icons8-legal-document-64.ico;." --add-data "C:\Users\CourtUser\Desktop\release\DocumentSIGner\dcs.png;."  C:\Users\CourtUser\Desktop\release\DocumentSIGner\documentSIGner.py
 
 logging.getLogger("PyQt5").setLevel(logging.WARNING)
 log_path = os.path.join(os.path.dirname(sys.argv[0]), 'log.log')

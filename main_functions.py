@@ -106,6 +106,8 @@ def sign_document(s_source_file, cert_data):
 
 
 def check_chosen_pages(chosen_pages_string):
+    if chosen_pages_string == 'all':
+        return 'all'
     outList = []
     chosen_pages_string = chosen_pages_string.replace(' ', '')
     if chosen_pages_string:
@@ -166,8 +168,13 @@ def add_text_to_stamp(template_path, cert_name, fingerprint, create_date, exp_da
 def add_stamp_to_pages(pdf_path, modified_stamp_path, pagelist):
     doc = fitz.open(pdf_path)
     img_stamp = fitz.Pixmap(modified_stamp_path)  # Загружаем изображение
+    metadata = doc.metadata
+    # Проверка, был ли документ создан с помощью "Microsoft: Print To PDF"
+    is_microsoft_pdf = 'Microsoft: Print To PDF' in (metadata.get('producer', '') + metadata.get('creator', ''))
     if pagelist == 'all':
         for page in doc:
+            if is_microsoft_pdf:
+                page.clean_contents()
             img_width, img_height = img_stamp.width / 4.5, img_stamp.height / 4.5
             page_width = page.rect.width
             page_height = page.rect.height
@@ -181,12 +188,14 @@ def add_stamp_to_pages(pdf_path, modified_stamp_path, pagelist):
         for page in pagelist:
             page = int(page)
             page_index = page-1
+            if is_microsoft_pdf:
+                doc[page_index].clean_contents()
             if page == -1:
                 page_index = -1
             img_width, img_height = img_stamp.width / 4.5, img_stamp.height / 4.5
             page_width = doc[page_index].rect.width
             page_height = doc[page_index].rect.height
-            x0 = (page_width/2)
+            x0 = (page_width / 2) - (img_width / 2)
             y0 = page_height-img_height-25
             x1 = x0 + img_width
             y1 = y0 + img_height
