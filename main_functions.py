@@ -11,6 +11,9 @@ from PIL import Image, ImageDraw, ImageFont
 import requests
 import tempfile
 import fitz
+import sys
+from PySide2.QtWidgets import QApplication, QDialog, QVBoxLayout, QListWidget, QListWidgetItem, QHBoxLayout, QLabel, QRadioButton, QLineEdit, QPushButton, QFileDialog, QWidget
+from PySide2.QtCore import Qt
 
 
 config_folder = os.path.dirname(sys.argv[0])
@@ -27,7 +30,8 @@ def read_create_config(config_path):
     default_configuration = {
         'port': '4999',
         "csp_path": r"C:\Program Files\Crypto Pro\CSP",
-        'last_cert': ''
+        'last_cert': '',
+        'widget_visible': True
     }
     if os.path.exists(config_path):
         try:
@@ -38,12 +42,17 @@ def read_create_config(config_path):
             os.remove(config_path)
             configuration = default_configuration
             with open(config_path, 'w') as configfile:
-                json.dump(configuration, configfile)
+                json.dump(configuration, configfile, indent=4)
     else:
         configuration = default_configuration
         with open(config_path, 'w') as configfile:
-            json.dump(configuration, configfile)
+            json.dump(configuration, configfile, indent=4)
     return configuration
+
+
+def save_config():
+    with open(config_file, 'w') as configfile:
+        json.dump(config, configfile, indent=4)
 
 
 config = read_create_config(config_file)
@@ -213,3 +222,92 @@ def resource_path(relative_path):
         base_path = os.path.abspath(".")
 
     return os.path.join(base_path, relative_path)
+
+
+def handle_dropped_files(file_paths):
+    dialog = FileDialog(file_paths)
+    dialog.show()
+    dialog.activateWindow()
+    return dialog
+
+
+class CustomListWidgetItem(QWidget):
+    def __init__(self, file_path):
+        super().__init__()
+
+        layout = QHBoxLayout()
+        self.file_path = file_path
+
+        # Название файла
+        self.file_label = QLabel(os.path.basename(file_path))
+        self.file_label.mouseDoubleClickEvent = self.open_file
+        layout.addWidget(self.file_label)
+
+        # Радиокнопки
+        self.radio_first = QRadioButton("Первая")
+        self.radio_last = QRadioButton("Последняя")
+        self.radio_last.setChecked(True)
+        self.radio_all = QRadioButton("Все")
+        self.radio_custom = QRadioButton("Своё")
+        layout.addWidget(self.radio_first)
+        layout.addWidget(self.radio_last)
+        layout.addWidget(self.radio_all)
+        layout.addWidget(self.radio_custom)
+
+        # Поле для ввода своих страниц
+        self.custom_pages = QLineEdit()
+        self.custom_pages.setPlaceholderText("Введите страницы")
+        layout.addWidget(self.custom_pages)
+
+        self.setLayout(layout)
+
+    def open_file(self, event):
+        # Открытие файла по двойному клику
+        os.startfile(self.file_path)
+
+
+class FileDialog(QDialog):
+    def __init__(self, file_paths):
+        super().__init__()
+
+        self.setWindowTitle("Подписание файлов")
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(2, 2, 2, 2)
+        self.layout.setSpacing(2)
+        self.resize(600, 400)
+        self.file_list = QListWidget()
+
+        for file_path in file_paths:
+            item = QListWidgetItem(self.file_list)
+            widget = CustomListWidgetItem(file_path)
+            item.setSizeHint(widget.sizeHint())
+            self.file_list.setItemWidget(item, widget)
+
+        self.layout.addWidget(self.file_list)
+
+        self.sign_button = QPushButton("Подписать")
+        self.sign_button.clicked.connect(self.sign_files)
+        self.layout.addWidget(self.sign_button)
+
+        self.setLayout(self.layout)
+
+    def sign_files(self):
+        for index in range(self.file_list.count()):
+            item = self.file_list.item(index)
+            widget = self.file_list.itemWidget(item)
+            file_path = widget.file_path
+
+            if widget.radio_first.isChecked():
+                pages = "first"
+            elif widget.radio_last.isChecked():
+                pages = "last"
+            elif widget.radio_all.isChecked():
+                pages = "all"
+            elif widget.radio_custom.isChecked():
+                pages = widget.custom_pages.text()
+            else:
+                pages = None
+
+            print(f"Файл: {file_path}, Страницы: {pages}")
+            # Вызов функции подписания файла с соответствующими параметрами
+            # sign_file(file_path, pages)

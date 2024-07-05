@@ -6,8 +6,9 @@ from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import tempfile
 import zipfile
-from PyQt5 import QtWidgets, QtGui, QtCore
-from PyQt5.QtCore import QTranslator, QLocale, QLibraryInfo
+from PySide2 import QtWidgets, QtGui, QtCore
+from PySide2.QtCore import QTranslator, QLocale, QLibraryInfo
+from widget_ui import Ui_MainWindow
 from threading import Thread
 from glob import glob
 import time
@@ -17,7 +18,7 @@ app = Flask(__name__)
 CORS(app)
 # C:\Users\CourtUser\Desktop\release\DocumentSIGner\venv\Scripts\pyinstaller.exe --windowed --icon "C:\Users\CourtUser\Desktop\release\DocumentSIGner\icons8-legal-document-64.ico" --add-data "C:\Users\CourtUser\Desktop\release\DocumentSIGner\icons8-legal-document-64.ico;." --add-data "C:\Users\CourtUser\Desktop\release\DocumentSIGner\dcs.png;."  C:\Users\CourtUser\Desktop\release\DocumentSIGner\documentSIGner.py
 
-logging.getLogger("PyQt5").setLevel(logging.WARNING)
+logging.getLogger("PySide2").setLevel(logging.WARNING)
 log_path = os.path.join(os.path.dirname(sys.argv[0]), 'log.log')
 logging.basicConfig(filename=log_path, level=logging.ERROR)
 
@@ -48,14 +49,30 @@ else:
 class SystemTrayGui(QtWidgets.QSystemTrayIcon):
     def __init__(self, icon, parent=None):
         QtWidgets.QSystemTrayIcon.__init__(self, icon, parent)
-        self.setToolTip(f'DocumentSIGner на порту {config["port"]}')
+        self.activated.connect(self.showMenuOnTrigger)
+        if config['soed']:
+            self.setToolTip(f'DocumentSIGner на порту {config["port"]}')
+        else:
+            self.setToolTip(f'DocumentSIGner отключен от сети.')
         menu = QtWidgets.QMenu(parent)
+        self.toggle_widget_action = menu.addAction("Отображать виджет")
+        self.toggle_widget_action.setCheckable(True)
+        self.toggle_widget_action.triggered.connect(self.toggle_widget)
         exit_action = menu.addAction("Выход")
         exit_action.triggered.connect(self.exit)
         self.setContextMenu(menu)
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self.check_for_sign_requests)
         self.timer.start(1000)  # Проверка каждую секунду
+        self.widget = QtWidgets.QMainWindow()
+        self.ui = Ui_MainWindow()
+        self.ui.setupUi(self.widget)
+        self.widget.setWindowFlags(QtCore.Qt.Tool | QtCore.Qt.FramelessWindowHint | QtCore.Qt.WindowStaysOnTopHint)
+        self.widget.setAttribute(QtCore.Qt.WA_TranslucentBackground)
+        self.widget.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+        if config.get('widget_visible', False):
+            self.toggle_widget_action.setChecked(True)
+            self.widget.show()
 
     def check_for_sign_requests(self):
         for file_path in glob("confirmations/waiting_*"):
@@ -65,6 +82,19 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
                 os.rename(file_path, f"accepted_{file_name}")
             else:
                 os.rename(file_path, f"declined_{file_name}")
+
+    def showMenuOnTrigger(self, reason):
+        if reason == QtWidgets.QSystemTrayIcon.Trigger:
+            self.contextMenu().popup(QtGui.QCursor.pos())
+
+    def toggle_widget(self):
+        if self.toggle_widget_action.isChecked():
+            self.widget.show()
+            config['widget_visible'] = True
+        else:
+            self.widget.hide()
+            config['widget_visible'] = False
+        save_config()
 
     def confirm_signing(self, file_name):
         msg_box = QtWidgets.QMessageBox()
@@ -147,7 +177,7 @@ def sign_file():
 
 
 def run_flask():
-    app.run(host="127.0.0.1", port=config['port'], use_reloader=False)
+    app.run(host="127.0.0.1", port=config['port'], use_reloader=False, debug=False)
 
 
 def main():
@@ -159,9 +189,8 @@ def main():
     translator.load("qtbase_" + locale, path)
     app.installTranslator(translator)
     # Запускаем Flask в отдельном потоке
-    thread = Thread(target=run_flask)
-    thread.daemon = True
-    thread.start()
+    if config['soed']:
+        Thread(target=run_flask, daemon=True).start()
     global tray_gui
     tray_gui = SystemTrayGui(QtGui.QIcon(resource_path('icons8-legal-document-64.ico')))
     tray_gui.show()
