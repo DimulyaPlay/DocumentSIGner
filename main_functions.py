@@ -1,5 +1,6 @@
 import json
 import os
+import socket
 import shutil
 import traceback
 import msvcrt
@@ -366,3 +367,14 @@ class FileDialog(QDialog):
                 traceback.print_exc()
         QMessageBox.information(self, 'Успех', 'Создание подписи завершено.')
 
+
+def send_file_paths_to_existing_instance(file_paths):
+    try:
+        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        client_socket.connect(('localhost', 65432))
+        for file_path in file_paths:
+            client_socket.sendall(file_path.encode() + b'\n')
+        client_socket.close()
+    except ConnectionRefusedError:
+        # Если соединение не удалось, значит приложение не запущено
+        pass

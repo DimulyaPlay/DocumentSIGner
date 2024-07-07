@@ -1,5 +1,4 @@
 import shutil
-
 from main_functions import *
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
@@ -86,6 +85,9 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         if config['widget_visible']:
             self.toggle_widget_visible.setChecked(True)
             self.widget.show()
+        # Запуск сокет-сервера в отдельном потоке
+        self.socket_server_thread = Thread(target=self.run_socket_server, daemon=True)
+        self.socket_server_thread.start()
 
     def check_for_sign_requests(self):
         for file_path in glob("confirmations/waiting_*"):
@@ -139,6 +141,25 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         msg_box.setWindowFlags(msg_box.windowFlags() | QtCore.Qt.WindowStaysOnTopHint)
         return_value = msg_box.exec()
         return return_value == QtWidgets.QMessageBox.Yes
+
+    def run_socket_server(self):
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_socket.bind(('localhost', 65432))
+        server_socket.listen()
+        while True:
+            conn, addr = server_socket.accept()
+            with conn:
+                data = b''
+                while True:
+                    chunk = conn.recv(1024)
+                    if not chunk:
+                        break
+                    data += chunk
+                if data:
+                    file_paths = data.decode().split('\n')
+                    file_paths = [fp for fp in file_paths if fp]  # Удаление пустых строк
+                    print(f"Received file paths: {file_paths}")
+                    self.dialog = handle_dropped_files(file_paths)
 
     def exit(self):
         QtWidgets.QApplication.quit()
@@ -224,6 +245,9 @@ def main():
     global tray_gui
     tray_gui = SystemTrayGui(QtGui.QIcon(resource_path('icons8-legal-document-64.ico')))
     tray_gui.show()
+    if len(sys.argv) > 1:
+        file_paths = sys.argv[1:]
+        send_file_paths_to_existing_instance(file_paths)
     sys.exit(app.exec_())
 
 
