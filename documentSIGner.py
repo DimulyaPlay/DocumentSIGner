@@ -36,7 +36,7 @@ def exception_hook(exc_type, exc_value, exc_traceback):
 
 
 sys.excepthook = exception_hook
-certs_data = get_cert_data(os.path.join(config['csp_path'], 'certmgr.exe'))
+certs_data = get_cert_data()
 
 if os.path.exists('./confirmations'):
     files = glob('confirmations/*')
@@ -49,15 +49,18 @@ else:
 class SystemTrayGui(QtWidgets.QSystemTrayIcon):
     def __init__(self, icon, parent=None):
         QtWidgets.QSystemTrayIcon.__init__(self, icon, parent)
-        self.activated.connect(self.showMenuOnTrigger)
-        if config['soed']:
-            self.setToolTip(f'DocumentSIGner на порту {config["port"]}')
-        else:
-            self.setToolTip(f'DocumentSIGner отключен от сети.')
+        self.activated.connect(self.show_menu)
+        self.soed = None
         menu = QtWidgets.QMenu(parent)
-        self.toggle_widget_action = menu.addAction("Отображать виджет")
-        self.toggle_widget_action.setCheckable(True)
-        self.toggle_widget_action.triggered.connect(self.toggle_widget)
+        self.toggle_soed_server = menu.addAction("СО ЭД сервер")
+        self.toggle_soed_server.setCheckable(True)
+        self.toggle_soed_server.triggered.connect(self.toggle_soed)
+        self.toggle_widget_visible = menu.addAction("Отображать виджет")
+        self.toggle_widget_visible.setCheckable(True)
+        self.toggle_widget_visible.triggered.connect(self.toggle_widget)
+        self.toggle_stamp_on_original = menu.addAction("Штамп на оригинале")
+        self.toggle_stamp_on_original.setCheckable(True)
+        self.toggle_stamp_on_original.triggered.connect(self.toggle_stamp)
         exit_action = menu.addAction("Выход")
         exit_action.triggered.connect(self.exit)
         self.setContextMenu(menu)
@@ -70,8 +73,18 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.widget.setWindowFlags(QtCore.Qt.Tool | QtCore.Qt.FramelessWindowHint | QtCore.Qt.WindowStaysOnTopHint)
         self.widget.setAttribute(QtCore.Qt.WA_TranslucentBackground)
         self.widget.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
-        if config.get('widget_visible', False):
-            self.toggle_widget_action.setChecked(True)
+        # Запускаем Flask в отдельном потоке
+        if config['soed']:
+            self.toggle_soed_server.setChecked(True)
+            self.soed = Thread(target=run_flask, daemon=True)
+            self.soed.start()
+            self.setToolTip(f'DocumentSIGner на порту {config["port"]}')
+        else:
+            self.setToolTip(f'DocumentSIGner отключен от сети.')
+        if config['stamp_on_original']:
+            self.toggle_stamp_on_original.setChecked(True)
+        if config['widget_visible']:
+            self.toggle_widget_visible.setChecked(True)
             self.widget.show()
 
     def check_for_sign_requests(self):
@@ -83,17 +96,37 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
             else:
                 os.rename(file_path, f"declined_{file_name}")
 
-    def showMenuOnTrigger(self, reason):
+    def show_menu(self, reason):
         if reason == QtWidgets.QSystemTrayIcon.Trigger:
             self.contextMenu().popup(QtGui.QCursor.pos())
 
-    def toggle_widget(self):
-        if self.toggle_widget_action.isChecked():
+    def toggle_widget(self, event=None):
+        if self.toggle_widget_visible.isChecked():
             self.widget.show()
             config['widget_visible'] = True
         else:
             self.widget.hide()
             config['widget_visible'] = False
+        save_config()
+
+    def toggle_soed(self):
+        if self.toggle_soed_server.isChecked():
+            self.soed = Thread(target=run_flask, daemon=True)
+            self.soed.start()
+            config['soed'] = True
+            self.setToolTip(f'DocumentSIGner на порту {config["port"]}')
+        else:
+            self.soed = None
+            config['soed'] = False
+            self.setToolTip(f'DocumentSIGner отключен от сети.')
+        save_config()
+
+    def toggle_stamp(self):
+        if self.toggle_stamp_on_original.isChecked():
+            config['stamp_on_original'] = True
+        else:
+            self.soed = None
+            config['stamp_on_original'] = False
         save_config()
 
     def confirm_signing(self, file_name):
@@ -114,7 +147,7 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
 @app.route('/get_certs', methods=['GET'])
 def get_certs():
     global certs_data
-    certs_data = get_cert_data(os.path.join(config['csp_path'], 'certmgr.exe'))
+    certs_data = get_cert_data()
     certs_list = list(certs_data.keys())
     return jsonify({'certificates': certs_list, 'last_cert': config['last_cert']})
 
@@ -188,9 +221,6 @@ def main():
     path = QLibraryInfo.location(QLibraryInfo.TranslationsPath)  # Путь к переводам Qt
     translator.load("qtbase_" + locale, path)
     app.installTranslator(translator)
-    # Запускаем Flask в отдельном потоке
-    if config['soed']:
-        Thread(target=run_flask, daemon=True).start()
     global tray_gui
     tray_gui = SystemTrayGui(QtGui.QIcon(resource_path('icons8-legal-document-64.ico')))
     tray_gui.show()

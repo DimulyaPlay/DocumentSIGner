@@ -12,7 +12,7 @@ import requests
 import tempfile
 import fitz
 import sys
-from PySide2.QtWidgets import QApplication, QDialog, QVBoxLayout, QListWidget, QListWidgetItem, QHBoxLayout, QLabel, QRadioButton, QLineEdit, QPushButton, QFileDialog, QWidget
+from PySide2.QtWidgets import QApplication, QDialog, QVBoxLayout, QListWidget, QListWidgetItem, QHBoxLayout, QLabel, QRadioButton, QLineEdit, QPushButton, QFileDialog, QWidget, QComboBox, QCheckBox, QMessageBox
 from PySide2.QtCore import Qt
 
 
@@ -28,7 +28,9 @@ date_exp = ('Истекает', 'Not valid after')
 
 def read_create_config(config_path):
     default_configuration = {
+        'soed': True,
         'port': '4999',
+        "stamp_on_original": True,
         "csp_path": r"C:\Program Files\Crypto Pro\CSP",
         'last_cert': '',
         'widget_visible': True
@@ -58,7 +60,8 @@ def save_config():
 config = read_create_config(config_file)
 
 
-def get_cert_data(cert_mgr_path):
+def get_cert_data():
+    cert_mgr_path = os.path.join(config['csp_path'], 'certmgr.exe')
     if os.path.exists(cert_mgr_path):
         certs_data = {}
         try:
@@ -115,6 +118,8 @@ def sign_document(s_source_file, cert_data):
 
 
 def check_chosen_pages(chosen_pages_string):
+    if not chosen_pages_string:
+        return []
     if chosen_pages_string == 'all':
         return 'all'
     outList = []
@@ -225,6 +230,7 @@ def resource_path(relative_path):
 
 
 def handle_dropped_files(file_paths):
+    file_paths = [fp for fp in file_paths if not fp.endswith('.sig')]
     dialog = FileDialog(file_paths)
     dialog.show()
     dialog.activateWindow()
@@ -241,14 +247,19 @@ class CustomListWidgetItem(QWidget):
         # Название файла
         self.file_label = QLabel(os.path.basename(file_path))
         self.file_label.mouseDoubleClickEvent = self.open_file
+        self.file_label.setMinimumWidth(440)
+        self.file_label.setToolTip(os.path.basename(file_path))
         layout.addWidget(self.file_label)
+        layout.addStretch()
 
         # Радиокнопки
+        self.radio_none = QRadioButton("Нет")
         self.radio_first = QRadioButton("Первая")
         self.radio_last = QRadioButton("Последняя")
         self.radio_last.setChecked(True)
         self.radio_all = QRadioButton("Все")
         self.radio_custom = QRadioButton("Своё")
+        layout.addWidget(self.radio_none)
         layout.addWidget(self.radio_first)
         layout.addWidget(self.radio_last)
         layout.addWidget(self.radio_all)
@@ -257,6 +268,8 @@ class CustomListWidgetItem(QWidget):
         # Поле для ввода своих страниц
         self.custom_pages = QLineEdit()
         self.custom_pages.setPlaceholderText("Введите страницы")
+        self.custom_pages.textEdited.connect(lambda: self.radio_custom.setChecked(True))
+        self.custom_pages.setFixedWidth(140)  # Фиксированная ширина
         layout.addWidget(self.custom_pages)
 
         self.setLayout(layout)
@@ -269,23 +282,50 @@ class CustomListWidgetItem(QWidget):
 class FileDialog(QDialog):
     def __init__(self, file_paths):
         super().__init__()
-
+        self.certs_data = get_cert_data()
+        self.certs_list = list(self.certs_data.keys())
         self.setWindowTitle("Подписание файлов")
         self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(2, 2, 2, 2)
-        self.layout.setSpacing(2)
+        self.layout.setContentsMargins(6, 6, 6, 6)
+        self.layout.setSpacing(4)
         self.resize(600, 400)
+        self.setMaximumWidth(1900)
         self.file_list = QListWidget()
-
         for file_path in file_paths:
             item = QListWidgetItem(self.file_list)
             widget = CustomListWidgetItem(file_path)
             item.setSizeHint(widget.sizeHint())
+            if self.width() < widget.sizeHint().width()+70:
+                self.setFixedWidth(widget.sizeHint().width()+70)
             self.file_list.setItemWidget(item, widget)
-
         self.layout.addWidget(self.file_list)
 
+        self.certificate_label = QLabel("Сертификат для подписи:")
+        font = self.certificate_label.font()
+        font.setPointSize(10)
+        self.certificate_label.setFont(font)
+        self.layout.addWidget(self.certificate_label)
+
+        self.certificate_comboBox = QComboBox()
+        self.certificate_comboBox.setFont(font)
+        if self.certs_list:
+            self.certificate_comboBox.addItems(self.certs_list)  # Добавьте свои сертификаты здесь
+        else:
+            self.certificate_comboBox.addItem('Не удалось найти сертификаты')
+        if config['last_cert'] and config['last_cert'] in self.certs_list:
+            self.certificate_comboBox.setCurrentText(config['last_cert'])
+        self.layout.addWidget(self.certificate_comboBox)
+
+        self.sign_original = QCheckBox('Ставить штамп на исходном файле.')
+        self.sign_original.setChecked(config['stamp_on_original'])
+        self.sign_original.setToolTip("""
+        Если включено, штамп наносится на оригинал, и создается подпись.
+        Если выключено, создается подпись для оригинала, а штамп наносится на копию.
+        """)
+        self.layout.addWidget(self.sign_original)
+
         self.sign_button = QPushButton("Подписать")
+        self.sign_button.setFont(font)
         self.sign_button.clicked.connect(self.sign_files)
         self.layout.addWidget(self.sign_button)
 
@@ -293,21 +333,36 @@ class FileDialog(QDialog):
 
     def sign_files(self):
         for index in range(self.file_list.count()):
-            item = self.file_list.item(index)
-            widget = self.file_list.itemWidget(item)
-            file_path = widget.file_path
+            try:
+                item = self.file_list.item(index)
+                widget = self.file_list.itemWidget(item)
+                file_path = widget.file_path
+                if widget.radio_first.isChecked():
+                    pages = [1]
+                elif widget.radio_last.isChecked():
+                    pages = [-1]
+                elif widget.radio_all.isChecked():
+                    pages = "all"
+                elif widget.radio_custom.isChecked():
+                    pages = widget.custom_pages.text()
+                    pages = check_chosen_pages(pages)
+                else:
+                    pages = None
+                print(f"Файл: {file_path}, Страницы: {pages}")
+                if file_path.endswith('.pdf') and pages:
+                    if not self.sign_original.isChecked():
+                        filepath_to_stamp = os.path.join(os.path.dirname(file_path),
+                                                         f'gf_{os.path.basename(file_path)}')
+                        shutil.copy(file_path, filepath_to_stamp)
+                        pages = check_chosen_pages(pages)
+                        if pages:
+                            _ = add_stamp(filepath_to_stamp, self.certificate_comboBox.currentText(), self.certs_data[self.certificate_comboBox.currentText()], pages)
+                    else:
+                        add_stamp(file_path, self.certificate_comboBox.currentText(), self.certs_data[self.certificate_comboBox.currentText()], pages)
 
-            if widget.radio_first.isChecked():
-                pages = "first"
-            elif widget.radio_last.isChecked():
-                pages = "last"
-            elif widget.radio_all.isChecked():
-                pages = "all"
-            elif widget.radio_custom.isChecked():
-                pages = widget.custom_pages.text()
-            else:
-                pages = None
+                sign_document(file_path, self.certs_data[self.certificate_comboBox.currentText()])
+            except Exception as e:
+                print(f'Не удалось подписать {file_path}: {e}')
+                traceback.print_exc()
+        QMessageBox.information(self, 'Успех', 'Создание подписи завершено.')
 
-            print(f"Файл: {file_path}, Страницы: {pages}")
-            # Вызов функции подписания файла с соответствующими параметрами
-            # sign_file(file_path, pages)
