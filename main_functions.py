@@ -13,15 +13,18 @@ import requests
 import tempfile
 import fitz
 import sys
+import winreg as reg
 from PySide2.QtWidgets import QApplication, QDialog, QVBoxLayout, QListWidget, QListWidgetItem, QHBoxLayout, QLabel, QRadioButton, QLineEdit, QPushButton, QFileDialog, QWidget, QComboBox, QCheckBox, QMessageBox
-from PySide2.QtCore import Qt
+from PySide2.QtCore import Qt, QThread, Signal
+from PySide2.QtGui import QIcon
+from queue import Queue
 
 
 config_folder = os.path.dirname(sys.argv[0])
 if not os.path.exists(config_folder):
     os.mkdir(config_folder)
 config_file = os.path.join(config_folder, 'config.json')
-
+file_paths_queue = Queue()
 serial_names = ('Серийный номер', 'Serial')
 date_make = ('Выдан', 'Not valid before')
 date_exp = ('Истекает', 'Not valid after')
@@ -34,7 +37,8 @@ def read_create_config(config_path):
         "stamp_on_original": True,
         "csp_path": r"C:\Program Files\Crypto Pro\CSP",
         'last_cert': '',
-        'widget_visible': True
+        'widget_visible': True,
+        "context_menu": False
     }
     if os.path.exists(config_path):
         try:
@@ -180,6 +184,52 @@ def add_text_to_stamp(template_path, cert_name, fingerprint, create_date, exp_da
     return modified_image_path
 
 
+def add_to_context_menu():
+    key = reg.HKEY_CLASSES_ROOT
+    key_path = r'*\shell\DocumentSIGner'
+    command_key_path = r'*\shell\DocumentSIGner\command'
+    multi_select_key_path = r'*\shell\DocumentSIGner\DropTarget\Command'
+    exe_path_one = f'\"{os.path.abspath(sys.argv[0])}\" \"%1\"'
+    exe_path_many = f'\"{os.path.abspath(sys.argv[0])}\" \"%*\"'
+    try:
+        reg.CreateKey(key, key_path)
+        reg.CreateKey(key, command_key_path)
+        reg.CreateKey(key, multi_select_key_path)  # Create the DropTarget\Command key
+        reg.SetValue(key, key_path, reg.REG_SZ, "Подписать с помощью DocumentSIGner")
+        reg.SetValue(key, command_key_path, reg.REG_SZ, exe_path_one)
+        reg.SetValue(key, multi_select_key_path, reg.REG_SZ, exe_path_many)  # Set the command for multiple files
+    except Exception as e:
+        print(f"Failed to add context menu: {e}")
+
+
+def remove_from_context_menu():
+    key = reg.HKEY_CLASSES_ROOT
+    key_path = r'*\shell\DocumentSIGner'
+
+    try:
+        delete_registry_key(key, key_path)
+    except Exception as e:
+        print(f"Failed to remove context menu: {e}")
+
+
+def delete_registry_key(key, key_path):
+    try:
+        open_key = reg.OpenKey(key, key_path, 0, reg.KEY_ALL_ACCESS)
+        num_subkeys, num_values, last_modified = reg.QueryInfoKey(open_key)
+
+        for i in range(num_subkeys):
+            subkey = reg.EnumKey(open_key, 0)
+            delete_registry_key(open_key, subkey)
+
+        reg.CloseKey(open_key)
+        reg.DeleteKey(key, key_path)
+    except FileNotFoundError:
+        pass  # Ключ не найден, ничего не делаем
+    except PermissionError as e:
+        print(f"Permission error: {e}")
+    except Exception as e:
+        print(f"Failed to delete registry key: {e}")
+
 def add_stamp_to_pages(pdf_path, modified_stamp_path, pagelist):
     doc = fitz.open(pdf_path)
     img_stamp = fitz.Pixmap(modified_stamp_path)  # Загружаем изображение
@@ -281,9 +331,10 @@ class CustomListWidgetItem(QWidget):
 
 
 class FileDialog(QDialog):
-    def __init__(self, file_paths):
+    def __init__(self,file_paths):
         super().__init__()
         self.certs_data = get_cert_data()
+        self.setWindowIcon(QIcon(resource_path('icons8-legal-document-64.ico')))
         self.certs_list = list(self.certs_data.keys())
         self.setWindowTitle("Подписание файлов")
         self.layout = QVBoxLayout(self)
@@ -293,12 +344,7 @@ class FileDialog(QDialog):
         self.setMaximumWidth(1900)
         self.file_list = QListWidget()
         for file_path in file_paths:
-            item = QListWidgetItem(self.file_list)
-            widget = CustomListWidgetItem(file_path)
-            item.setSizeHint(widget.sizeHint())
-            if self.width() < widget.sizeHint().width()+70:
-                self.setFixedWidth(widget.sizeHint().width()+70)
-            self.file_list.setItemWidget(item, widget)
+            self.append_new_file_to_list(file_path)
         self.layout.addWidget(self.file_list)
 
         self.certificate_label = QLabel("Сертификат для подписи:")
@@ -323,6 +369,7 @@ class FileDialog(QDialog):
         Если включено, штамп наносится на оригинал, и создается подпись.
         Если выключено, создается подпись для оригинала, а штамп наносится на копию.
         """)
+        self.sign_original.setFont(font)
         self.layout.addWidget(self.sign_original)
 
         self.sign_button = QPushButton("Подписать")
@@ -367,14 +414,40 @@ class FileDialog(QDialog):
                 traceback.print_exc()
         QMessageBox.information(self, 'Успех', 'Создание подписи завершено.')
 
+    def append_new_file_to_list(self, file_path):
+        item = QListWidgetItem(self.file_list)
+        widget = CustomListWidgetItem(file_path)
+        item.setSizeHint(widget.sizeHint())
+        if self.width() < widget.sizeHint().width() + 10:
+            self.setFixedWidth(widget.sizeHint().width() + 10)
+        self.file_list.setItemWidget(item, widget)
 
-def send_file_paths_to_existing_instance(file_paths):
+    def closeEvent(self, event):
+        self.file_list.clear()
+        self.close()
+
+def send_file_path_to_existing_instance(file_path):
     try:
+        print('Attempting to send file paths to existing instance...')  # Лог для отладки
         client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         client_socket.connect(('localhost', 65432))
-        for file_path in file_paths:
-            client_socket.sendall(file_path.encode() + b'\n')
+        print('Connected to the socket server')  # Лог для отладки
+        data = file_path[0]
+        client_socket.sendall(data.encode())
         client_socket.close()
+        print('File paths sent successfully and connection closed')  # Лог для отладки
+        return 1
     except ConnectionRefusedError:
-        # Если соединение не удалось, значит приложение не запущено
-        pass
+        print('Connection to the socket server failed')  # Лог для отладки
+        return 0
+
+
+class QueueMonitorThread(QThread):
+    file_path_signal = Signal(str)
+    def run(self):
+        while True:
+            file_path = file_paths_queue.get()
+            if file_path is None:
+                break
+            self.file_path_signal.emit(file_path)
+            file_paths_queue.task_done()
