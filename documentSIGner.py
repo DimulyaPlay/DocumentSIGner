@@ -8,7 +8,7 @@ from glob import glob
 import time
 import logging
 import socket
-from main_functions import resource_path, add_to_context_menu, remove_from_context_menu, config, save_config, send_file_path_to_existing_instance, file_paths_queue, QueueMonitorThread, FileDialog, handle_dropped_files
+from main_functions import resource_path, add_to_context_menu, remove_from_context_menu, RulesDialog, config, save_config, send_file_path_to_existing_instance, file_paths_queue, QueueMonitorThread, FileDialog, handle_dropped_files
 
 # C:\Users\CourtUser\Desktop\release\DocumentSIGner\venv\Scripts\pyinstaller.exe --windowed --console --noconfirm --icon "C:\Users\CourtUser\Desktop\release\DocumentSIGner\icons8-legal-document-64.ico" --add-data "C:\Users\CourtUser\Desktop\release\DocumentSIGner\icons8-legal-document-64.ico;." --add-data "C:\Users\CourtUser\Desktop\release\DocumentSIGner\dcs.png;."  C:\Users\CourtUser\Desktop\release\DocumentSIGner\documentSIGner.py
 
@@ -49,6 +49,8 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.toggle_context_menu.setCheckable(True)
         self.toggle_context_menu.setChecked(config['context_menu'])
         self.toggle_context_menu.triggered.connect(self.toggle_context_menu_option)
+        self.open_rules_window = menu.addAction("Меню правил")
+        self.open_rules_window.triggered.connect(self.open_rules)
         exit_action = menu.addAction("Выход")
         exit_action.triggered.connect(self.exit)
         self.setContextMenu(menu)
@@ -103,6 +105,12 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
     def show_menu(self, reason):
         if reason == QtWidgets.QSystemTrayIcon.Trigger:
             self.contextMenu().popup(QtGui.QCursor.pos())
+
+    def open_rules(self):
+        rules_file = 'rules.txt'
+        self.dialog = RulesDialog(rules_file)
+        self.dialog.show()
+        self.dialog.activateWindow()
 
     def toggle_widget(self):
         if self.toggle_widget_visible.isChecked():

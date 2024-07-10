@@ -14,10 +14,11 @@ import tempfile
 import fitz
 import sys
 import winreg as reg
-from PySide2.QtWidgets import QApplication, QDialog, QVBoxLayout, QListWidget, QListWidgetItem, QHBoxLayout, QLabel, QRadioButton, QLineEdit, QPushButton, QFileDialog, QWidget, QComboBox, QCheckBox, QMessageBox
+from PySide2.QtWidgets import QApplication, QDialog, QVBoxLayout, QListWidget, QTableWidget, QTableWidgetItem, QListWidgetItem, QHBoxLayout, QLabel, QRadioButton, QLineEdit, QPushButton, QFileDialog, QWidget, QComboBox, QCheckBox, QMessageBox
 from PySide2.QtCore import Qt, QThread, Signal
 from PySide2.QtGui import QIcon
 from queue import Queue
+import fnmatch
 
 
 config_folder = os.path.dirname(sys.argv[0])
@@ -294,6 +295,7 @@ class CustomListWidgetItem(QWidget):
 
         layout = QHBoxLayout()
         self.file_path = file_path
+        self.page_fragment = ""  # Переменная для хранения найденного фрагмента
 
         # Название файла
         self.file_label = QLabel(os.path.basename(file_path))
@@ -325,13 +327,33 @@ class CustomListWidgetItem(QWidget):
 
         self.setLayout(layout)
 
+        # Парсинг имени файла для страниц
+        self.parse_file_name_for_pages()
+
     def open_file(self, event):
         # Открытие файла по двойному клику
         os.startfile(self.file_path)
 
+    def parse_file_name_for_pages(self):
+        # Регулярное выражение для извлечения страниц из имени файла
+        pattern = r'\{(.*?)\}'
+        match = re.search(pattern, os.path.basename(self.file_path))
+        if match:
+            self.page_fragment = match.group(0)
+            pages = match.group(1)
+            self.custom_pages.setText(pages)
+            self.radio_custom.setChecked(True)
+
+    def get_clean_file_path(self):
+        # Возвращает имя файла без фрагмента страниц
+        if self.page_fragment:
+            return os.path.basename(self.file_path).replace(self.page_fragment, '')
+        else:
+            return self.file_path
+
 
 class FileDialog(QDialog):
-    def __init__(self,file_paths):
+    def __init__(self, file_paths):
         super().__init__()
         self.certs_data = get_cert_data()
         self.setWindowIcon(QIcon(resource_path('icons8-legal-document-64.ico')))
@@ -342,14 +364,22 @@ class FileDialog(QDialog):
         self.layout.setSpacing(4)
         self.resize(600, 400)
         self.setMaximumWidth(1900)
+        self.rules_file = resource_path('rules.txt')
+
+        # Добавляем QLabel с инструкцией
+        self.instruction_label = QLabel("Укажите страницы для размещения штампа на документе, выберите сертификат из списка и нажмите 'Подписать'")
+        font = self.instruction_label.font()
+        font.setPointSize(10)
+        self.instruction_label.setFont(font)
+        self.instruction_label.setAlignment(Qt.AlignCenter)
+        self.layout.addWidget(self.instruction_label)
+
         self.file_list = QListWidget()
         for file_path in file_paths:
             self.append_new_file_to_list(file_path)
         self.layout.addWidget(self.file_list)
 
         self.certificate_label = QLabel("Сертификат для подписи:")
-        font = self.certificate_label.font()
-        font.setPointSize(10)
         self.certificate_label.setFont(font)
         self.layout.addWidget(self.certificate_label)
 
@@ -380,11 +410,45 @@ class FileDialog(QDialog):
         self.setLayout(self.layout)
 
     def sign_files(self):
+        # Загрузка и проверка файла по правилам из rules.txt
+        if os.path.exists(self.rules_file):
+            with open(self.rules_file, 'r') as file:
+                rules = file.readlines()
+        else:
+            rules = []
         for index in range(self.file_list.count()):
             try:
                 item = self.file_list.item(index)
                 widget = self.file_list.itemWidget(item)
                 file_path = widget.file_path
+                file_path_clean = widget.get_clean_file_path()
+                if file_path != file_path_clean:
+                    shutil.move(file_path, file_path_clean)
+                    file_path = file_path_clean
+                    # Блок проверки пользовательских правил перемещения
+                    for rule in rules:
+                        source_dir, patterns, dest_dir = rule.strip().split('|')
+                        if file_path.startswith(source_dir):
+                            if not patterns:
+                                # Перемещаем файл в целевую директорию
+                                new_file_path = os.path.join(dest_dir, os.path.basename(file_path))
+                                shutil.move(file_path, new_file_path)
+                                file_path = new_file_path
+                                break
+                            patterns_list = patterns.split(';')
+                            # Проверяем, соответствует ли файл всем паттернам
+                            all_patterns_match = True
+                            for pattern in patterns_list:
+                                if not fnmatch.fnmatch(os.path.basename(file_path), pattern):
+                                    all_patterns_match = False
+                                    break
+                            if all_patterns_match:
+                                # Перемещаем файл в целевую директорию
+                                new_file_path = os.path.join(dest_dir, os.path.basename(file_path))
+                                shutil.move(file_path, new_file_path)
+                                file_path = new_file_path
+                                break
+
                 if widget.radio_first.isChecked():
                     pages = [1]
                 elif widget.radio_last.isChecked():
@@ -425,6 +489,95 @@ class FileDialog(QDialog):
     def closeEvent(self, event):
         self.file_list.clear()
         self.close()
+
+
+class RulesDialog(QDialog):
+    def __init__(self, rules_file):
+        super().__init__()
+        self.rules_file = rules_file
+        self.initUI()
+
+    def initUI(self):
+        self.setWindowIcon(QIcon(resource_path('icons8-legal-document-64.ico')))
+        self.setWindowTitle('Правила после подписания')
+
+        layout = QVBoxLayout()
+        self.instruction_label = QLabel('Исходное расположение: место, файлы в котором будут проверяться\nПаттерны: пустое поле - все файлы, текст* - файл начинается с "текст", *текст.pdf - файл заканчивается на "текст.pdf", *текст* - файл содержит в названии "текст"\nПаттерны можно расположить друг за другом через ;, они будет вычисляться со знаком И. Для ИЛИ нужно добавить паттерны в новую строку как еще одно правило.\nЦелевое расположение: место, куда помещать подходящий файл и подписи.')
+        font = self.instruction_label.font()
+        font.setPointSize(10)
+        self.instruction_label.setFont(font)
+        layout.addWidget(self.instruction_label)
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(['Исходное расположение', 'Паттерны', 'Целевое расположение'])
+        layout.addWidget(self.table)
+
+        button_layout = QHBoxLayout()
+
+        self.load_button = QPushButton('Загрузить правила из .txt')
+        self.load_button.clicked.connect(lambda: self.load_rules(from_file=True))
+        button_layout.addWidget(self.load_button)
+
+        self.save_button = QPushButton('Сохранить правила')
+        self.save_button.clicked.connect(self.save_rules)
+        button_layout.addWidget(self.save_button)
+
+        self.add_row_button = QPushButton('Добавить правило')
+        self.add_row_button.clicked.connect(self.add_row)
+        button_layout.addWidget(self.add_row_button)
+
+        layout.addLayout(button_layout)
+        self.setLayout(layout)
+        # Resize columns after setting the layout
+        self.table.resizeColumnsToContents()
+
+        self.load_rules(from_file=False)
+
+        self.resize_columns_to_max_width()
+
+    def resize_columns_to_max_width(self):
+        max_width = 600
+        for column in range(self.table.columnCount()):
+            width = self.table.columnWidth(column)
+            if width > max_width:
+                self.table.setColumnWidth(column, max_width)
+
+    def load_rules(self, from_file=True):
+        if from_file:
+            options = QFileDialog.Options()
+            fileName, _ = QFileDialog.getOpenFileName(self, "Open Rules File", "", "Text Files (*.txt);;All Files (*)",
+                                                      options=options)
+            if fileName:
+                rules_file = fileName
+            else:
+                return
+        else:
+            rules_file = self.rules_file
+        if not os.path.exists(self.rules_file) and not from_file:
+            return
+        with open(rules_file, 'r') as file:
+            lines = file.readlines()
+            self.table.setRowCount(0)
+            for line in lines:
+                parts = line.strip().split('|')
+                if len(parts) == 3:
+                    self.add_row(parts[0], parts[1], parts[2])
+            self.resize_columns_to_max_width()
+
+    def save_rules(self):
+        with open(self.rules_file, 'w') as file:
+            for row in range(self.table.rowCount()):
+                source_dir = self.table.item(row, 0).text()
+                patterns = self.table.item(row, 1).text()
+                dest_dir = self.table.item(row, 2).text()
+                file.write(f'{source_dir}|{patterns}|{dest_dir}\n')
+
+    def add_row(self, source_dir='', patterns='', dest_dir=''):
+        row_position = self.table.rowCount()
+        self.table.insertRow(row_position)
+        self.table.setItem(row_position, 0, QTableWidgetItem(source_dir))
+        self.table.setItem(row_position, 1, QTableWidgetItem(patterns))
+        self.table.setItem(row_position, 2, QTableWidgetItem(dest_dir))
+
 
 def send_file_path_to_existing_instance(file_path):
     try:
