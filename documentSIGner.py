@@ -11,6 +11,7 @@ import socket
 from main_functions import resource_path, add_to_context_menu, remove_from_context_menu, RulesDialog, config, save_config, send_file_path_to_existing_instance, file_paths_queue, QueueMonitorThread, FileDialog, handle_dropped_files
 import msvcrt
 import os
+import winshell
 
 # C:\Users\CourtUser\Desktop\release\DocumentSIGner\venv\Scripts\pyinstaller.exe --windowed --console --noconfirm --icon "C:\Users\CourtUser\Desktop\release\DocumentSIGner\icons8-legal-document-64.ico" --add-data "C:\Users\CourtUser\Desktop\release\DocumentSIGner\icons8-legal-document-64.ico;." --add-data "C:\Users\CourtUser\Desktop\release\DocumentSIGner\dcs.png;."  C:\Users\CourtUser\Desktop\release\DocumentSIGner\documentSIGner.py
 
@@ -31,12 +32,13 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         QtWidgets.QSystemTrayIcon.__init__(self, icon, parent)
         self.activated.connect(self.show_menu)
         self.soed = None
-        if os.path.exists('./confirmations'):
-            files = glob('confirmations/*')
+        confirmations_path = os.path.join(os.path.dirname(sys.argv[0]), 'confirmations')
+        if os.path.exists(confirmations_path):
+            files = glob(f'{confirmations_path}/*')
             for file in files:
                 os.remove(file)
         else:
-            os.mkdir('./confirmations')
+            os.mkdir(confirmations_path)
         menu = QtWidgets.QMenu(parent)
         self.toggle_soed_server = menu.addAction("СО ЭД сервер")
         self.toggle_soed_server.setCheckable(True)
@@ -51,6 +53,10 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.toggle_context_menu.setCheckable(True)
         self.toggle_context_menu.setChecked(config['context_menu'])
         self.toggle_context_menu.triggered.connect(self.toggle_context_menu_option)
+        self.toggle_autorun = menu.addAction("Автозапуск приложения")
+        self.toggle_autorun.setCheckable(True)
+        self.toggle_autorun.setChecked(config['autorun'])
+        self.toggle_autorun.triggered.connect(self.toggle_startup)
         self.open_rules_window = menu.addAction("Меню правил")
         self.open_rules_window.triggered.connect(self.open_rules)
         exit_action = menu.addAction("Выход")
@@ -95,6 +101,7 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
             self.dialog.show()
             self.dialog.activateWindow()
 
+
     def check_for_sign_requests(self):
         for file_path in glob("confirmations/waiting_*"):
             file_name = file_path.split("_", 1)[1]
@@ -121,6 +128,27 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         else:
             self.widget.hide()
             config['widget_visible'] = False
+        save_config()
+
+    def toggle_startup(self):
+        def create_shortcut(shortcut_path):
+            if not os.path.exists(shortcut_path):
+                from win32com.client import Dispatch
+                shell = Dispatch('WScript.Shell')
+                shortcut = shell.CreateShortCut(shortcut_path)
+                shortcut.TargetPath = sys.argv[0]
+                shortcut.WorkingDirectory = os.path.dirname(sys.argv[0])
+                shortcut.save()
+
+        startup_folder = winshell.startup()
+        shortcut_path = os.path.join(startup_folder, f"DocumentSIGner.lnk")
+        if self.toggle_autorun.isChecked():
+            create_shortcut(shortcut_path)
+            config['autorun'] = True
+        else:
+            if os.path.exists(shortcut_path):
+                os.unlink(shortcut_path)
+            config['autorun'] = False
         save_config()
 
     def toggle_soed(self):

@@ -40,7 +40,8 @@ def read_create_config(config_path):
         "csp_path": r"C:\Program Files\Crypto Pro\CSP",
         'last_cert': '',
         'widget_visible': False,
-        "context_menu": False
+        "context_menu": False,
+        'autorun': False
     }
     if os.path.exists(config_path):
         try:
@@ -182,7 +183,7 @@ def add_text_to_stamp(template_path, cert_name, fingerprint, create_date, exp_da
     draw.text(text_positions['fingerprint'], "                          " + fingerprint[2:], fill='blue', font=font)
     draw.text(text_positions['create_date'], "Действителен:", fill='blue', font=font)
     draw.text(text_positions['create_date'], "                          " + f"c {create_date} по {exp_date}", fill='blue', font=font)
-    modified_image_path = "modified_stamp.png"
+    modified_image_path = os.path.join(os.path.dirname(sys.argv[0]), 'modified_stamp.png')
     template_image.save(modified_image_path)
     return modified_image_path
 
@@ -255,10 +256,10 @@ def add_stamp_to_pages(pdf_path, modified_stamp_path, pagelist):
         for page in pagelist:
             page = int(page)
             page_index = page-1
+            if page == -1:
+                page_index = len(doc)-1
             if is_microsoft_pdf:
                 doc[page_index].clean_contents()
-            if page == -1:
-                page_index = -1
             img_width, img_height = img_stamp.width / 4.5, img_stamp.height / 4.5
             page_width = doc[page_index].rect.width
             page_height = doc[page_index].rect.height
@@ -282,7 +283,7 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 
-def handle_dropped_files(file_paths):
+def handle_dropped_files(file_paths, dialog=None):
     file_paths = [fp for fp in file_paths if not fp.endswith('.sig')]
     dialog = FileDialog(file_paths)
     dialog.show()
@@ -444,7 +445,6 @@ class FileDialog(QDialog):
                         filepath_to_stamp = os.path.join(os.path.dirname(file_path),
                                                          f'gf_{os.path.basename(file_path)}')
                         shutil.copy(file_path, filepath_to_stamp)
-                        pages = check_chosen_pages(pages)
                         if pages:
                             _ = add_stamp(filepath_to_stamp, self.certificate_comboBox.currentText(), self.certs_data[self.certificate_comboBox.currentText()], pages)
                     else:

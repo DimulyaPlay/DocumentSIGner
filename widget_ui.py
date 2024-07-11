@@ -22,6 +22,7 @@ class Ui_MainWindow(QObject):
             MainWindow.setObjectName(u"MainWindow")
         MainWindow.resize(60, 60)
         MainWindow.move(1600, 940)
+        self.dialog = None
         self.centralwidget = QWidget(MainWindow)
         self.centralwidget.setObjectName(u"centralwidget")
         self.gridLayout = QGridLayout(self.centralwidget)
@@ -74,7 +75,15 @@ class Ui_MainWindow(QObject):
             file_paths = []
             for url in urls:
                 file_paths.append(url.toLocalFile())
-            self.dialog = handle_dropped_files(file_paths)
+            if self.dialog:
+                for file_path in file_paths:
+                    self.dialog.append_new_file_to_list(file_path)
+                self.dialog.show()
+                self.dialog.activateWindow()
+            else:
+                self.dialog = handle_dropped_files(file_paths)
+                self.dialog.show()
+                self.dialog.activateWindow()
             return True
         return super().eventFilter(obj, event)
 
