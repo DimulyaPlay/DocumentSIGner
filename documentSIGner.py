@@ -9,6 +9,8 @@ import time
 import logging
 import socket
 from main_functions import resource_path, add_to_context_menu, remove_from_context_menu, RulesDialog, config, save_config, send_file_path_to_existing_instance, file_paths_queue, QueueMonitorThread, FileDialog, handle_dropped_files
+import msvcrt
+import os
 
 # C:\Users\CourtUser\Desktop\release\DocumentSIGner\venv\Scripts\pyinstaller.exe --windowed --console --noconfirm --icon "C:\Users\CourtUser\Desktop\release\DocumentSIGner\icons8-legal-document-64.ico" --add-data "C:\Users\CourtUser\Desktop\release\DocumentSIGner\icons8-legal-document-64.ico;." --add-data "C:\Users\CourtUser\Desktop\release\DocumentSIGner\dcs.png;."  C:\Users\CourtUser\Desktop\release\DocumentSIGner\documentSIGner.py
 
@@ -108,9 +110,9 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
 
     def open_rules(self):
         rules_file = 'rules.txt'
-        self.dialog = RulesDialog(rules_file)
-        self.dialog.show()
-        self.dialog.activateWindow()
+        self.rules_dialog = RulesDialog(rules_file)
+        self.rules_dialog.show()
+        self.rules_dialog.activateWindow()
 
     def toggle_widget(self):
         if self.toggle_widget_visible.isChecked():
@@ -180,7 +182,6 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
                     file_path = data.decode()
                     print(f"Received file path: {file_path}")
                     file_paths_queue.put(file_path)
-                    # self.dialog = handle_dropped_files(file_paths)
 
     def exit(self):
         QtWidgets.QApplication.quit()
@@ -189,6 +190,13 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
 def run_flask():
     app.run(host="127.0.0.1", port=config['port'], use_reloader=False, debug=False)
 
+def is_port_free():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind(('localhost', 65432))
+            return True
+        except OSError:
+            return False
 
 def main():
     qt_app = QtWidgets.QApplication(sys.argv)
@@ -205,17 +213,30 @@ def main():
 
 
 if __name__ == '__main__':
-    if len(sys.argv) > 1:
-        file_paths = sys.argv[1:]
-        result = send_file_path_to_existing_instance(file_paths)
-        if result:
-            sys.exit(0)
-        else:
+    lock_file_path = os.path.join(os.path.dirname(sys.argv[0]), 'app_instance.lock')
+    # Попытка захватить блокировку файла
+    lock_file = open(lock_file_path, 'w')
+    try:
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+        first_instance = True
+        print('First instance')
+    except:
+        first_instance = False
+        print('NOT First instance')
+    if not first_instance:
+        if len(sys.argv) > 1:
+            file_paths = sys.argv[1:]
+            result = send_file_path_to_existing_instance(file_paths)
+            if result:
+                sys.exit(0)
+    else:
+        if len(sys.argv) > 1:
+            file_paths = sys.argv[1:]
             file_paths_queue.put(file_paths[0])
-    from flask_app import *
-    logging.getLogger("PySide2").setLevel(logging.WARNING)
-    log_path = os.path.join(os.path.dirname(sys.argv[0]), 'log.log')
-    logging.basicConfig(filename=log_path, level=logging.ERROR)
-    sys.excepthook = exception_hook
-    certs_data = get_cert_data()
-    main()
+        from flask_app import *
+        logging.getLogger("PySide2").setLevel(logging.WARNING)
+        log_path = os.path.join(os.path.dirname(sys.argv[0]), 'log.log')
+        logging.basicConfig(filename=log_path, level=logging.ERROR)
+        sys.excepthook = exception_hook
+        certs_data = get_cert_data()
+        main()

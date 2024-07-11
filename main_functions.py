@@ -19,6 +19,7 @@ from PySide2.QtCore import Qt, QThread, Signal
 from PySide2.QtGui import QIcon
 from queue import Queue
 import fnmatch
+import time
 
 
 config_folder = os.path.dirname(sys.argv[0])
@@ -38,7 +39,7 @@ def read_create_config(config_path):
         "stamp_on_original": True,
         "csp_path": r"C:\Program Files\Crypto Pro\CSP",
         'last_cert': '',
-        'widget_visible': True,
+        'widget_visible': False,
         "context_menu": False
     }
     if os.path.exists(config_path):
@@ -114,12 +115,13 @@ def sign_document(s_source_file, cert_data):
             output = result.returncode
             if output == 2148081675:
                 print('Не удалось найти закрытый ключ')
-                return 1
+                return 0
             elif os.path.isfile(f"{s_source_file}.sig"):
                 return f"{s_source_file}.sig"
             else:
-                return 2
+                return 0
         else:
+            return 0
             print(f"Не удается найти исходный файл [{s_source_file}].")
 
 
@@ -239,8 +241,7 @@ def add_stamp_to_pages(pdf_path, modified_stamp_path, pagelist):
     is_microsoft_pdf = 'Microsoft: Print To PDF' in (metadata.get('producer', '') + metadata.get('creator', ''))
     if pagelist == 'all':
         for page in doc:
-            if is_microsoft_pdf:
-                page.clean_contents()
+            page.clean_contents()
             img_width, img_height = img_stamp.width / 4.5, img_stamp.height / 4.5
             page_width = page.rect.width
             page_height = page.rect.height
@@ -364,7 +365,7 @@ class FileDialog(QDialog):
         self.layout.setSpacing(4)
         self.resize(600, 400)
         self.setMaximumWidth(1900)
-        self.rules_file = resource_path('rules.txt')
+        self.rules_file = 'rules.txt'
 
         # Добавляем QLabel с инструкцией
         self.instruction_label = QLabel("Укажите страницы для размещения штампа на документе, выберите сертификат из списка и нажмите 'Подписать'")
@@ -416,6 +417,7 @@ class FileDialog(QDialog):
                 rules = file.readlines()
         else:
             rules = []
+        filepath_to_stamp = ''
         for index in range(self.file_list.count()):
             try:
                 item = self.file_list.item(index)
@@ -425,30 +427,6 @@ class FileDialog(QDialog):
                 if file_path != file_path_clean:
                     shutil.move(file_path, file_path_clean)
                     file_path = file_path_clean
-                    # Блок проверки пользовательских правил перемещения
-                    for rule in rules:
-                        source_dir, patterns, dest_dir = rule.strip().split('|')
-                        if file_path.startswith(source_dir):
-                            if not patterns:
-                                # Перемещаем файл в целевую директорию
-                                new_file_path = os.path.join(dest_dir, os.path.basename(file_path))
-                                shutil.move(file_path, new_file_path)
-                                file_path = new_file_path
-                                break
-                            patterns_list = patterns.split(';')
-                            # Проверяем, соответствует ли файл всем паттернам
-                            all_patterns_match = True
-                            for pattern in patterns_list:
-                                if not fnmatch.fnmatch(os.path.basename(file_path), pattern):
-                                    all_patterns_match = False
-                                    break
-                            if all_patterns_match:
-                                # Перемещаем файл в целевую директорию
-                                new_file_path = os.path.join(dest_dir, os.path.basename(file_path))
-                                shutil.move(file_path, new_file_path)
-                                file_path = new_file_path
-                                break
-
                 if widget.radio_first.isChecked():
                     pages = [1]
                 elif widget.radio_last.isChecked():
@@ -472,7 +450,37 @@ class FileDialog(QDialog):
                     else:
                         add_stamp(file_path, self.certificate_comboBox.currentText(), self.certs_data[self.certificate_comboBox.currentText()], pages)
 
-                sign_document(file_path, self.certs_data[self.certificate_comboBox.currentText()])
+                sign = sign_document(file_path, self.certs_data[self.certificate_comboBox.currentText()])
+                if sign:
+                    # Блок проверки пользовательских правил перемещения
+                    for rule in rules:
+                        source_dir, patterns, dest_dir = rule.strip().split('|')
+                        if file_path.startswith(source_dir):
+                            if not patterns:
+                                # Перемещаем файл в целевую директорию
+                                new_file_path = os.path.join(dest_dir, os.path.basename(file_path))
+                                shutil.move(file_path, new_file_path)
+                                shutil.move(sign, new_file_path+'.sig')
+                                if filepath_to_stamp:
+                                    new_file_path_to_stamp = os.path.join(dest_dir, os.path.basename(filepath_to_stamp))
+                                    shutil.move(filepath_to_stamp, new_file_path_to_stamp)
+                                break
+                            patterns_list = patterns.split(';')
+                            # Проверяем, соответствует ли файл всем паттернам
+                            all_patterns_match = True
+                            for pattern in patterns_list:
+                                if not fnmatch.fnmatch(os.path.basename(file_path), pattern):
+                                    all_patterns_match = False
+                                    break
+                            if all_patterns_match:
+                                # Перемещаем файл в целевую директорию
+                                new_file_path = os.path.join(dest_dir, os.path.basename(file_path))
+                                shutil.move(file_path, new_file_path)
+                                shutil.move(sign, new_file_path+'.sig')
+                                if filepath_to_stamp:
+                                    new_file_path_to_stamp = os.path.join(dest_dir, os.path.basename(filepath_to_stamp))
+                                    shutil.move(filepath_to_stamp, new_file_path_to_stamp)
+                                break
             except Exception as e:
                 print(f'Не удалось подписать {file_path}: {e}')
                 traceback.print_exc()
@@ -524,6 +532,10 @@ class RulesDialog(QDialog):
         self.add_row_button = QPushButton('Добавить правило')
         self.add_row_button.clicked.connect(self.add_row)
         button_layout.addWidget(self.add_row_button)
+
+        self.del_row_button = QPushButton('Удалить правило')
+        self.del_row_button.clicked.connect(self.del_row)
+        button_layout.addWidget(self.del_row_button)
 
         layout.addLayout(button_layout)
         self.setLayout(layout)
@@ -578,21 +590,30 @@ class RulesDialog(QDialog):
         self.table.setItem(row_position, 1, QTableWidgetItem(patterns))
         self.table.setItem(row_position, 2, QTableWidgetItem(dest_dir))
 
+    def del_row(self):
+        row_position = self.table.currentRow()
+        self.table.removeRow(row_position)
 
-def send_file_path_to_existing_instance(file_path):
-    try:
-        print('Attempting to send file paths to existing instance...')  # Лог для отладки
-        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client_socket.connect(('localhost', 65432))
-        print('Connected to the socket server')  # Лог для отладки
-        data = file_path[0]
-        client_socket.sendall(data.encode())
-        client_socket.close()
-        print('File paths sent successfully and connection closed')  # Лог для отладки
-        return 1
-    except ConnectionRefusedError:
-        print('Connection to the socket server failed')  # Лог для отладки
-        return 0
+
+def send_file_path_to_existing_instance(file_paths):
+    attempts = 5
+    for attempt in range(attempts):
+        try:
+            print(f'Attempt {attempt + 1} to send file paths to existing instance...')  # Лог для отладки
+            client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            client_socket.connect(('localhost', 65432))
+            print('Connected to the socket server')  # Лог для отладки
+            data = file_paths[0]
+            client_socket.sendall(data.encode())
+            client_socket.close()
+            print('File paths sent successfully and connection closed')  # Лог для отладки
+            return 1
+        except ConnectionRefusedError:
+            print('Connection to the socket server failed')  # Лог для отладки
+            if attempt < attempts - 1:
+                print('Retrying in 1 second...')  # Лог для отладки
+                time.sleep(1)
+    return 0
 
 
 class QueueMonitorThread(QThread):
