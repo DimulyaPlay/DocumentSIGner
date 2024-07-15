@@ -41,7 +41,8 @@ def read_create_config(config_path):
         'last_cert': '',
         'widget_visible': False,
         "context_menu": False,
-        'autorun': False
+        'autorun': False,
+        'default_page': 2
     }
     if os.path.exists(config_path):
         try:
@@ -309,11 +310,19 @@ class CustomListWidgetItem(QWidget):
 
         # Радиокнопки
         self.radio_none = QRadioButton("Нет")
+        self.radio_none.setEnabled(self.file_path.endswith('.pdf'))
+        self.radio_none.setChecked(config.get('default_page', 2) == 0)
         self.radio_first = QRadioButton("Первая")
+        self.radio_first.setEnabled(self.file_path.endswith('.pdf'))
+        self.radio_first.setChecked(config.get('default_page', 2) == 1)
         self.radio_last = QRadioButton("Последняя")
-        self.radio_last.setChecked(True)
+        self.radio_last.setEnabled(self.file_path.endswith('.pdf'))
+        self.radio_last.setChecked(config.get('default_page', 2) == 2)
         self.radio_all = QRadioButton("Все")
+        self.radio_all.setEnabled(self.file_path.endswith('.pdf'))
+        self.radio_all.setChecked(config.get('default_page', 2) == 3)
         self.radio_custom = QRadioButton("Своё")
+        self.radio_custom.setEnabled(self.file_path.endswith('.pdf'))
         layout.addWidget(self.radio_none)
         layout.addWidget(self.radio_first)
         layout.addWidget(self.radio_last)
@@ -323,8 +332,9 @@ class CustomListWidgetItem(QWidget):
         # Поле для ввода своих страниц
         self.custom_pages = QLineEdit()
         self.custom_pages.setPlaceholderText("Введите страницы")
+        self.custom_pages.setEnabled(self.file_path.endswith('.pdf'))
         self.custom_pages.textEdited.connect(lambda: self.radio_custom.setChecked(True))
-        self.custom_pages.setFixedWidth(140)  # Фиксированная ширина
+        self.custom_pages.setFixedWidth(110)  # Фиксированная ширина
         layout.addWidget(self.custom_pages)
 
         self.setLayout(layout)
@@ -366,10 +376,15 @@ class FileDialog(QDialog):
         self.layout.setSpacing(4)
         self.resize(600, 400)
         self.setMaximumWidth(1900)
-        self.rules_file = 'rules.txt'
-
+        self.rules_file = os.path.join(os.path.dirname(sys.argv[0]), 'rules.txt')
+        # Загрузка и проверка файла по правилам из rules.txt
+        if os.path.exists(self.rules_file):
+            with open(self.rules_file, 'r') as file:
+                self.rules = file.readlines()
+        else:
+            self.rules = []
         # Добавляем QLabel с инструкцией
-        self.instruction_label = QLabel("Укажите страницы для размещения штампа на документе, выберите сертификат из списка и нажмите 'Подписать'")
+        self.instruction_label = QLabel("Укажите страницы для размещения штампа на документе (только для PDF), выберите сертификат из списка и нажмите 'Подписать'")
         font = self.instruction_label.font()
         font.setPointSize(10)
         self.instruction_label.setFont(font)
@@ -404,99 +419,135 @@ class FileDialog(QDialog):
         self.sign_original.setFont(font)
         self.layout.addWidget(self.sign_original)
 
-        self.sign_button = QPushButton("Подписать")
+        layout_buttons = QHBoxLayout()
+        layout_buttons.setContentsMargins(0, 0, 0, 0)
+        layout_buttons.setSpacing(4)
+
+        self.sign_button = QPushButton("Подписать все")
         self.sign_button.setFont(font)
-        self.sign_button.clicked.connect(self.sign_files)
-        self.layout.addWidget(self.sign_button)
+        self.sign_button.clicked.connect(self.sign_all)
+        layout_buttons.addWidget(self.sign_button)
+
+        self.sign_button = QPushButton("Подписать выделенный")
+        self.sign_button.setFont(font)
+        self.sign_button.clicked.connect(self.sign_chosen)
+        layout_buttons.addWidget(self.sign_button)
+
+        self.layout.addLayout(layout_buttons)
 
         self.setLayout(self.layout)
 
-    def sign_files(self):
-        # Загрузка и проверка файла по правилам из rules.txt
-        if os.path.exists(self.rules_file):
-            with open(self.rules_file, 'r') as file:
-                rules = file.readlines()
+    def sign_chosen(self):
+        selected_items = self.file_list.selectedItems()
+        if selected_items:
+            index = self.file_list.row(selected_items[0])
+            res, err, fp = self.sign_file(index)
+            if res:
+                QMessageBox.warning(self, 'Ошибка', f'Возникла ошибка при подписании:\n{err}')
+            else:
+                QMessageBox.information(self, 'Успех', 'Создание подписи завершено.')
         else:
-            rules = []
-        filepath_to_stamp = ''
-        for index in range(self.file_list.count()):
-            try:
-                item = self.file_list.item(index)
-                widget = self.file_list.itemWidget(item)
-                file_path = widget.file_path
-                file_path_clean = widget.get_clean_file_path()
-                if file_path != file_path_clean:
-                    shutil.move(file_path, file_path_clean)
-                    file_path = file_path_clean
-                if widget.radio_first.isChecked():
-                    pages = [1]
-                elif widget.radio_last.isChecked():
-                    pages = [-1]
-                elif widget.radio_all.isChecked():
-                    pages = "all"
-                elif widget.radio_custom.isChecked():
-                    pages = widget.custom_pages.text()
-                    pages = check_chosen_pages(pages)
-                else:
-                    pages = None
-                print(f"Файл: {file_path}, Страницы: {pages}")
-                if file_path.endswith('.pdf') and pages:
-                    if not self.sign_original.isChecked():
-                        filepath_to_stamp = os.path.join(os.path.dirname(file_path),
-                                                         f'gf_{os.path.basename(file_path)}')
-                        shutil.copy(file_path, filepath_to_stamp)
-                        if pages:
-                            _ = add_stamp(filepath_to_stamp, self.certificate_comboBox.currentText(), self.certs_data[self.certificate_comboBox.currentText()], pages)
-                    else:
-                        add_stamp(file_path, self.certificate_comboBox.currentText(), self.certs_data[self.certificate_comboBox.currentText()], pages)
+            QMessageBox.information(self, 'Ничего не выбрано', 'Выберите документ из списка выше.')
 
-                sign = sign_document(file_path, self.certs_data[self.certificate_comboBox.currentText()])
-                if sign:
-                    # Блок проверки пользовательских правил перемещения
-                    for rule in rules:
-                        source_dir, patterns, dest_dir = rule.strip().split('|')
-                        if file_path.startswith(source_dir):
-                            if not patterns:
-                                # Перемещаем файл в целевую директорию
-                                new_file_path = os.path.join(dest_dir, os.path.basename(file_path))
-                                shutil.move(file_path, new_file_path)
-                                shutil.move(sign, new_file_path+'.sig')
-                                if filepath_to_stamp:
-                                    new_file_path_to_stamp = os.path.join(dest_dir, os.path.basename(filepath_to_stamp))
-                                    shutil.move(filepath_to_stamp, new_file_path_to_stamp)
+    def sign_all(self):
+        res_total = 0
+        fuckuped_files = {}
+        for index in range(self.file_list.count()):
+            res, err, fp = self.sign_file(index)
+            if res:
+                res_total += res
+                fuckuped_files[fp] = str(err)
+
+        if res_total:
+            msg_lst = [f'{os.path.basename(fp)}-{err}' for fp, err in fuckuped_files.items()]
+            msg_str = '\n'.join(msg_lst)
+            QMessageBox.warning(self, 'Ошибка', f'Возникли ошибки со следующими документами:\n{msg_str}')
+        else:
+            QMessageBox.information(self, 'Успех', 'Создание подписи завершено.')
+
+    def sign_file(self, index):
+        try:
+            filepath_to_stamp = ''
+            item = self.file_list.item(index)
+            widget = self.file_list.itemWidget(item)
+            file_path = widget.file_path
+            file_path_clean = widget.get_clean_file_path()
+            if file_path != file_path_clean:
+                shutil.move(file_path, file_path_clean)
+                file_path = file_path_clean
+            if widget.radio_first.isChecked():
+                pages = [1]
+            elif widget.radio_last.isChecked():
+                pages = [-1]
+            elif widget.radio_all.isChecked():
+                pages = "all"
+            elif widget.radio_custom.isChecked():
+                pages = widget.custom_pages.text()
+                pages = check_chosen_pages(pages)
+            else:
+                pages = None
+            print(f"Файл: {file_path}, Страницы: {pages}")
+            if file_path.endswith('.pdf') and pages:
+                if not self.sign_original.isChecked():
+                    filepath_to_stamp = os.path.join(os.path.dirname(file_path),
+                                                     f'gf_{os.path.basename(file_path)}')
+                    shutil.copy(file_path, filepath_to_stamp)
+                    if pages:
+                        _ = add_stamp(filepath_to_stamp, self.certificate_comboBox.currentText(),
+                                      self.certs_data[self.certificate_comboBox.currentText()], pages)
+                else:
+                    add_stamp(file_path, self.certificate_comboBox.currentText(),
+                              self.certs_data[self.certificate_comboBox.currentText()], pages)
+
+            sign = sign_document(file_path, self.certs_data[self.certificate_comboBox.currentText()])
+            if sign:
+                # Блок проверки пользовательских правил перемещения
+                for rule in self.rules:
+                    source_dir, patterns, dest_dir = rule.strip().split('|')
+                    if file_path.startswith(source_dir):
+                        if not patterns:
+                            # Перемещаем файл в целевую директорию
+                            new_file_path = os.path.join(dest_dir, os.path.basename(file_path))
+                            shutil.move(file_path, new_file_path)
+                            shutil.move(sign, new_file_path + '.sig')
+                            if filepath_to_stamp:
+                                new_file_path_to_stamp = os.path.join(dest_dir, os.path.basename(filepath_to_stamp))
+                                shutil.move(filepath_to_stamp, new_file_path_to_stamp)
+                            break
+                        patterns_list = patterns.split(';')
+                        # Проверяем, соответствует ли файл всем паттернам
+                        all_patterns_match = True
+                        for pattern in patterns_list:
+                            if not fnmatch.fnmatch(os.path.basename(file_path), pattern):
+                                all_patterns_match = False
                                 break
-                            patterns_list = patterns.split(';')
-                            # Проверяем, соответствует ли файл всем паттернам
-                            all_patterns_match = True
-                            for pattern in patterns_list:
-                                if not fnmatch.fnmatch(os.path.basename(file_path), pattern):
-                                    all_patterns_match = False
-                                    break
-                            if all_patterns_match:
-                                # Перемещаем файл в целевую директорию
-                                new_file_path = os.path.join(dest_dir, os.path.basename(file_path))
-                                shutil.move(file_path, new_file_path)
-                                shutil.move(sign, new_file_path+'.sig')
-                                if filepath_to_stamp:
-                                    new_file_path_to_stamp = os.path.join(dest_dir, os.path.basename(filepath_to_stamp))
-                                    shutil.move(filepath_to_stamp, new_file_path_to_stamp)
-                                break
-            except Exception as e:
-                print(f'Не удалось подписать {file_path}: {e}')
-                traceback.print_exc()
-        QMessageBox.information(self, 'Успех', 'Создание подписи завершено.')
+                        if all_patterns_match:
+                            # Перемещаем файл в целевую директорию
+                            new_file_path = os.path.join(dest_dir, os.path.basename(file_path))
+                            shutil.move(file_path, new_file_path)
+                            shutil.move(sign, new_file_path + '.sig')
+                            if filepath_to_stamp:
+                                new_file_path_to_stamp = os.path.join(dest_dir, os.path.basename(filepath_to_stamp))
+                                shutil.move(filepath_to_stamp, new_file_path_to_stamp)
+        except Exception as e:
+            print(f'Не удалось подписать {file_path}: {e}')
+            traceback.print_exc()
+            return 1, e, file_path
+        config['last_cert'] = self.certificate_comboBox.currentText()
+        save_config()
+        return 0, '', file_path
 
     def append_new_file_to_list(self, file_path):
         item = QListWidgetItem(self.file_list)
         widget = CustomListWidgetItem(file_path)
         item.setSizeHint(widget.sizeHint())
-        if self.width() < widget.sizeHint().width() + 10:
-            self.setFixedWidth(widget.sizeHint().width() + 10)
+        if self.width() < widget.sizeHint().width() + 35:
+            self.setFixedWidth(widget.sizeHint().width() + 35)
         self.file_list.setItemWidget(item, widget)
 
     def closeEvent(self, event):
         self.file_list.clear()
-        self.close()
+        self.hide()
 
 
 class RulesDialog(QDialog):
@@ -510,7 +561,7 @@ class RulesDialog(QDialog):
         self.setWindowTitle('Правила после подписания')
 
         layout = QVBoxLayout()
-        self.instruction_label = QLabel('Исходное расположение: место, файлы в котором будут проверяться\nПаттерны: пустое поле - все файлы, текст* - файл начинается с "текст", *текст.pdf - файл заканчивается на "текст.pdf", *текст* - файл содержит в названии "текст"\nПаттерны можно расположить друг за другом через ;, они будет вычисляться со знаком И. Для ИЛИ нужно добавить паттерны в новую строку как еще одно правило.\nЦелевое расположение: место, куда помещать подходящий файл и подписи.')
+        self.instruction_label = QLabel('Исходное расположение: место, файлы в котором будут проверяться\nПаттерны: * - все файлы, текст* - файл начинается с "текст", *текст.pdf - файл заканчивается на "текст.pdf", *текст* - файл содержит в названии "текст"\nПаттерны можно расположить друг за другом через ;, они будет вычисляться со знаком И. Для ИЛИ нужно добавить паттерны в новую строку как еще одно правило.\nЦелевое расположение: место, куда помещать подходящий файл и подписи.')
         font = self.instruction_label.font()
         font.setPointSize(10)
         self.instruction_label.setFont(font)

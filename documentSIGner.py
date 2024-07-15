@@ -11,6 +11,7 @@ import socket
 from main_functions import resource_path, add_to_context_menu, remove_from_context_menu, RulesDialog, config, save_config, send_file_path_to_existing_instance, file_paths_queue, QueueMonitorThread, FileDialog, handle_dropped_files
 import msvcrt
 import os
+import fnmatch
 import winshell
 
 # C:\Users\CourtUser\Desktop\release\DocumentSIGner\venv\Scripts\pyinstaller.exe --windowed --console --noconfirm --icon "C:\Users\CourtUser\Desktop\release\DocumentSIGner\icons8-legal-document-64.ico" --add-data "C:\Users\CourtUser\Desktop\release\DocumentSIGner\icons8-legal-document-64.ico;." --add-data "C:\Users\CourtUser\Desktop\release\DocumentSIGner\dcs.png;."  C:\Users\CourtUser\Desktop\release\DocumentSIGner\documentSIGner.py
@@ -32,6 +33,7 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         QtWidgets.QSystemTrayIcon.__init__(self, icon, parent)
         self.activated.connect(self.show_menu)
         self.soed = None
+        self.dialog = FileDialog([])
         confirmations_path = os.path.join(os.path.dirname(sys.argv[0]), 'confirmations')
         if os.path.exists(confirmations_path):
             files = glob(f'{confirmations_path}/*')
@@ -39,6 +41,7 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
                 os.remove(file)
         else:
             os.mkdir(confirmations_path)
+        self.rules_file = os.path.join(os.path.dirname(sys.argv[0]), 'rules.txt')
         menu = QtWidgets.QMenu(parent)
         self.toggle_soed_server = menu.addAction("СО ЭД сервер")
         self.toggle_soed_server.setCheckable(True)
@@ -59,6 +62,33 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.toggle_autorun.triggered.connect(self.toggle_startup)
         self.open_rules_window = menu.addAction("Меню правил")
         self.open_rules_window.triggered.connect(self.open_rules)
+
+        # Создаем подменю для "Страница штампа по умолчанию"
+        self.default_page_menu = QtWidgets.QMenu("Стр. штампа по ум.", menu)
+        self.radio_none = QtWidgets.QAction("Нет", self.default_page_menu)
+        self.radio_none.setCheckable(True)
+        self.radio_none.setChecked(config.get('default_page', 2) == 0)
+        self.radio_none.triggered.connect(lambda: self.set_default_page(0))
+        self.radio_first = QtWidgets.QAction("Первая", self.default_page_menu)
+        self.radio_first.setCheckable(True)
+        self.radio_first.setChecked(config.get('default_page', 2) == 1)
+        self.radio_first.triggered.connect(lambda: self.set_default_page(1))
+        self.radio_last = QtWidgets.QAction("Последняя", self.default_page_menu)
+        self.radio_last.setCheckable(True)
+        self.radio_last.setChecked(config.get('default_page', 2) == 2)
+        self.radio_last.triggered.connect(lambda: self.set_default_page(2))
+        self.radio_all = QtWidgets.QAction("Все", self.default_page_menu)
+        self.radio_all.setCheckable(True)
+        self.radio_all.setChecked(config.get('default_page', 2) == 3)
+        self.radio_all.triggered.connect(lambda: self.set_default_page(3))
+        # Добавляем переключатели в подменю
+        self.default_page_menu.addAction(self.radio_none)
+        self.default_page_menu.addAction(self.radio_first)
+        self.default_page_menu.addAction(self.radio_last)
+        self.default_page_menu.addAction(self.radio_all)
+        # Добавляем подменю в основное меню
+        menu.addMenu(self.default_page_menu)
+
         exit_action = menu.addAction("Выход")
         exit_action.triggered.connect(self.exit)
         self.setContextMenu(menu)
@@ -86,7 +116,6 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         # Запуск сокет-сервера в отдельном потоке
         self.socket_server_thread = Thread(target=self.run_socket_server, daemon=True)
         self.socket_server_thread.start()
-        self.dialog = None
         self.queue_thread = QueueMonitorThread()
         self.queue_thread.file_path_signal.connect(self.add_file_to_list)
         self.queue_thread.start()
@@ -96,11 +125,18 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
             self.dialog.append_new_file_to_list(file_path)
             self.dialog.show()
             self.dialog.activateWindow()
-        else:
-            self.dialog = FileDialog([file_path])
-            self.dialog.show()
-            self.dialog.activateWindow()
+        # else:
+        #     self.dialog.show()
+        #     self.dialog.activateWindow()
 
+    def set_default_page(self, page):
+        config['default_page'] = page
+        save_config()
+        # Обновляем состояние радиокнопок
+        self.radio_none.setChecked(page == 0)
+        self.radio_first.setChecked(page == 1)
+        self.radio_last.setChecked(page == 2)
+        self.radio_all.setChecked(page == 3)
 
     def check_for_sign_requests(self):
         for file_path in glob("confirmations/waiting_*"):
@@ -113,10 +149,38 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
 
     def show_menu(self, reason):
         if reason == QtWidgets.QSystemTrayIcon.Trigger:
-            self.contextMenu().popup(QtGui.QCursor.pos())
+            file_list_for_sign = self.get_list_for_sign()
+            for fp in file_list_for_sign:
+                self.add_file_to_list(fp)
+
+    def get_list_for_sign(self):
+        matching_files = []
+        # Загрузка и проверка файла по правилам из rules.txt
+        if os.path.exists(self.rules_file):
+            with open(self.rules_file, 'r') as file:
+                self.rules = file.readlines()
+        else:
+            self.rules = []
+        for rule in self.rules:
+            source_dir, patterns, _ = rule.strip().split('|')
+            patterns_list = patterns.split(';')
+            # Получение всех файлов в корневой директории
+            for file_name in os.listdir(source_dir):
+                if file_name in ['Thumbs.db']:
+                    continue
+                file_path = os.path.join(source_dir, file_name)
+                # Пропускаем файлы с окончанием .sig
+                if file_name.endswith('.sig') or os.path.isdir(file_path):
+                    continue
+                # Пропускаем файлы, у которых есть копия с окончанием .sig
+                sig_file_path = file_path + '.sig'
+                if os.path.exists(sig_file_path):
+                    continue
+                matching_files.append(file_path)
+        return matching_files
 
     def open_rules(self):
-        rules_file = 'rules.txt'
+        rules_file = os.path.join(os.path.dirname(sys.argv[0]), 'rules.txt')
         self.rules_dialog = RulesDialog(rules_file)
         self.rules_dialog.show()
         self.rules_dialog.activateWindow()

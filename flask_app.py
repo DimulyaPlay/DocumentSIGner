@@ -1,4 +1,4 @@
-from main_functions import get_cert_data, config
+from main_functions import get_cert_data, config, sign_document
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -7,6 +7,7 @@ import zipfile
 import os
 import shutil
 import traceback
+import time
 
 app = Flask(__name__)
 CORS(app)
