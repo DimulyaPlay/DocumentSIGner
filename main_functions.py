@@ -16,10 +16,12 @@ import sys
 import winreg as reg
 from PySide2.QtWidgets import QApplication, QDialog, QVBoxLayout, QListWidget, QTableWidget, QTableWidgetItem, QListWidgetItem, QHBoxLayout, QLabel, QRadioButton, QLineEdit, QPushButton, QFileDialog, QWidget, QComboBox, QCheckBox, QMessageBox
 from PySide2.QtCore import Qt, QThread, Signal
-from PySide2.QtGui import QIcon
+from PySide2.QtGui import QIcon, QMovie
 from queue import Queue
 import fnmatch
 import time
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
 
 
 config_folder = os.path.dirname(sys.argv[0])
@@ -27,7 +29,9 @@ if not os.path.exists(config_folder):
     os.mkdir(config_folder)
 config_file = os.path.join(config_folder, 'config.json')
 file_paths_queue = Queue()
+
 serial_names = ('Серийный номер', 'Serial')
+sha1 = ('SHA1 отпечаток', 'SHA1 Hash')
 date_make = ('Выдан', 'Not valid before')
 date_exp = ('Истекает', 'Not valid after')
 
@@ -42,22 +46,29 @@ def read_create_config(config_path):
         'widget_visible': False,
         "context_menu": False,
         'autorun': False,
-        'default_page': 2
+        'default_page': 2,
+        'notify': False
     }
+
+    def update_configuration(configuration, default_configuration):
+        for key, value in default_configuration.items():
+            if key not in configuration:
+                configuration[key] = value
+        return configuration
+
     if os.path.exists(config_path):
         try:
             with open(config_path, 'r') as configfile:
                 configuration = json.load(configfile)
+                configuration = update_configuration(configuration, default_configuration)
         except Exception as e:
             print(e)
             os.remove(config_path)
             configuration = default_configuration
-            with open(config_path, 'w') as configfile:
-                json.dump(configuration, configfile, indent=4)
     else:
         configuration = default_configuration
-        with open(config_path, 'w') as configfile:
-            json.dump(configuration, configfile, indent=4)
+    with open(config_path, 'w') as configfile:
+        json.dump(configuration, configfile, indent=4)
     return configuration
 
 
@@ -117,14 +128,16 @@ def sign_document(s_source_file, cert_data):
             output = result.returncode
             if output == 2148081675:
                 print('Не удалось найти закрытый ключ')
+                print(result)
                 return 0
             elif os.path.isfile(f"{s_source_file}.sig"):
                 return f"{s_source_file}.sig"
             else:
+                print(result)
                 return 0
         else:
-            return 0
             print(f"Не удается найти исходный файл [{s_source_file}].")
+            return 0
 
 
 def check_chosen_pages(chosen_pages_string):
@@ -310,8 +323,8 @@ class CustomListWidgetItem(QWidget):
 
         # Радиокнопки
         self.radio_none = QRadioButton("Нет")
-        self.radio_none.setEnabled(self.file_path.endswith('.pdf'))
         self.radio_none.setChecked(config.get('default_page', 2) == 0)
+        self.radio_none.setChecked(not self.file_path.endswith('.pdf'))
         self.radio_first = QRadioButton("Первая")
         self.radio_first.setEnabled(self.file_path.endswith('.pdf'))
         self.radio_first.setChecked(config.get('default_page', 2) == 1)
@@ -363,6 +376,8 @@ class CustomListWidgetItem(QWidget):
         else:
             return self.file_path
 
+    def set_file_label_background(self, color):
+        self.file_label.setStyleSheet(f"color: {color};")
 
 class FileDialog(QDialog):
     def __init__(self, file_paths):
@@ -423,51 +438,92 @@ class FileDialog(QDialog):
         layout_buttons.setContentsMargins(0, 0, 0, 0)
         layout_buttons.setSpacing(4)
 
-        self.sign_button = QPushButton("Подписать все")
-        self.sign_button.setFont(font)
-        self.sign_button.clicked.connect(self.sign_all)
-        layout_buttons.addWidget(self.sign_button)
+        self.sign_button_all = QPushButton("Подписать все")
+        self.sign_button_all.setFixedHeight(28)
+        self.sign_button_all.setFont(font)
+        self.sign_button_all.clicked.connect(self.sign_all)
+        layout_buttons.addWidget(self.sign_button_all)
 
-        self.sign_button = QPushButton("Подписать выделенный")
-        self.sign_button.setFont(font)
-        self.sign_button.clicked.connect(self.sign_chosen)
-        layout_buttons.addWidget(self.sign_button)
+        self.loading_label = QLabel()
+        self.loading_label.setFixedSize(32, 32)  # Устанавливаем фиксированный размер для QLabel
+        self.loading_label.setStyleSheet("background-color: transparent;")  # Удаляем фон
+        layout_buttons.addWidget(self.loading_label)
+
+        self.movie = QMovie(os.path.join(os.path.dirname(sys.argv[0]), '35.gif'))
+        self.movie.setScaledSize(self.loading_label.size())  # Масштабируем анимацию до размера QLabel
+
+        self.sign_button_chosen = QPushButton("Подписать выделенный")
+        self.sign_button_chosen.setFixedHeight(28)
+        self.sign_button_chosen.setFont(font)
+        self.sign_button_chosen.clicked.connect(self.sign_chosen)
+        layout_buttons.addWidget(self.sign_button_chosen)
 
         self.layout.addLayout(layout_buttons)
 
         self.setLayout(self.layout)
 
+    def sign_all(self):
+        self.block_buttons(True)
+        self.loading_label.setMovie(self.movie)
+        self.movie.start()
+
+        self.thread = SignAllFilesThread(self)
+        self.thread.result.connect(self.on_sign_all_result)
+        self.thread.start()
+
     def sign_chosen(self):
         selected_items = self.file_list.selectedItems()
         if selected_items:
             index = self.file_list.row(selected_items[0])
-            res, err, fp = self.sign_file(index)
-            if res:
-                QMessageBox.warning(self, 'Ошибка', f'Возникла ошибка при подписании:\n{err}')
-            else:
-                QMessageBox.information(self, 'Успех', 'Создание подписи завершено.')
+            self.block_buttons(True)
+            self.loading_label.setMovie(self.movie)
+            self.movie.start()
+            self.thread = SignFileThread(index, self)
+            self.thread.result.connect(self.on_sign_result)
+            self.thread.start()
         else:
             QMessageBox.information(self, 'Ничего не выбрано', 'Выберите документ из списка выше.')
 
-    def sign_all(self):
-        res_total = 0
-        fuckuped_files = {}
-        for index in range(self.file_list.count()):
-            res, err, fp = self.sign_file(index)
-            if res:
-                res_total += res
-                fuckuped_files[fp] = str(err)
+    def on_sign_result(self, res, err, index):
+        item = self.file_list.item(index)
+        widget = self.file_list.itemWidget(item)
+        self.movie.stop()
+        self.loading_label.clear()
+        self.block_buttons(False)
+        if res:
+            QMessageBox.warning(self, 'Ошибка', f'Возникла ошибка при подписании:\n{err}')
+            widget.set_file_label_background("red")
+        else:
+            QMessageBox.information(self, 'Успех', 'Создание подписи завершено.')
+            widget.set_file_label_background("green")
 
-        if res_total:
+    def on_sign_all_result(self, fuckuped_files, index_list_red, index_list_green):
+        self.movie.stop()
+        self.loading_label.clear()
+        self.block_buttons(False)
+        for idx in index_list_green:
+            item = self.file_list.item(idx)
+            widget = self.file_list.itemWidget(item)
+            widget.set_file_label_background("green")
+        if fuckuped_files:
+            for idx in index_list_red:
+                item = self.file_list.item(idx)
+                widget = self.file_list.itemWidget(item)
+                widget.set_file_label_background("red")
             msg_lst = [f'{os.path.basename(fp)}-{err}' for fp, err in fuckuped_files.items()]
             msg_str = '\n'.join(msg_lst)
             QMessageBox.warning(self, 'Ошибка', f'Возникли ошибки со следующими документами:\n{msg_str}')
         else:
             QMessageBox.information(self, 'Успех', 'Создание подписи завершено.')
 
+    def block_buttons(self, block):
+        self.sign_button_all.setEnabled(not block)
+        self.sign_button_chosen.setEnabled(not block)
+
     def sign_file(self, index):
         try:
             filepath_to_stamp = ''
+            new_file_path = ""
             item = self.file_list.item(index)
             widget = self.file_list.itemWidget(item)
             file_path = widget.file_path
@@ -503,16 +559,18 @@ class FileDialog(QDialog):
             if sign:
                 # Блок проверки пользовательских правил перемещения
                 for rule in self.rules:
-                    source_dir, patterns, dest_dir = rule.strip().split('|')
+                    source_dir, patterns, dest_dir, _ = rule.strip().split('|')
                     if file_path.startswith(source_dir):
                         if not patterns:
                             # Перемещаем файл в целевую директорию
                             new_file_path = os.path.join(dest_dir, os.path.basename(file_path))
                             shutil.move(file_path, new_file_path)
                             shutil.move(sign, new_file_path + '.sig')
+                            widget.file_path = new_file_path
                             if filepath_to_stamp:
                                 new_file_path_to_stamp = os.path.join(dest_dir, os.path.basename(filepath_to_stamp))
                                 shutil.move(filepath_to_stamp, new_file_path_to_stamp)
+                                widget.file_path = filepath_to_stamp
                             break
                         patterns_list = patterns.split(';')
                         # Проверяем, соответствует ли файл всем паттернам
@@ -526,9 +584,14 @@ class FileDialog(QDialog):
                             new_file_path = os.path.join(dest_dir, os.path.basename(file_path))
                             shutil.move(file_path, new_file_path)
                             shutil.move(sign, new_file_path + '.sig')
+                            widget.file_path = new_file_path
                             if filepath_to_stamp:
                                 new_file_path_to_stamp = os.path.join(dest_dir, os.path.basename(filepath_to_stamp))
                                 shutil.move(filepath_to_stamp, new_file_path_to_stamp)
+                                widget.file_path = new_file_path_to_stamp
+            else:
+                print(f'Не удалось подписать {file_path}')
+                return 1, '', file_path
         except Exception as e:
             print(f'Не удалось подписать {file_path}: {e}')
             traceback.print_exc()
@@ -561,13 +624,13 @@ class RulesDialog(QDialog):
         self.setWindowTitle('Правила после подписания')
 
         layout = QVBoxLayout()
-        self.instruction_label = QLabel('Исходное расположение: место, файлы в котором будут проверяться\nПаттерны: * - все файлы, текст* - файл начинается с "текст", *текст.pdf - файл заканчивается на "текст.pdf", *текст* - файл содержит в названии "текст"\nПаттерны можно расположить друг за другом через ;, они будет вычисляться со знаком И. Для ИЛИ нужно добавить паттерны в новую строку как еще одно правило.\nЦелевое расположение: место, куда помещать подходящий файл и подписи.')
+        self.instruction_label = QLabel('Исходное расположение: место, файлы в котором будут проверяться\nПаттерны: * - все файлы, текст* - файл начинается с "текст", *текст.pdf - файл заканчивается на "текст.pdf", *текст* - файл содержит в названии "текст"\nПаттерны можно расположить друг за другом через ;, они будет вычисляться со знаком И. Для ИЛИ нужно добавить паттерны в новую строку как еще одно правило.\nЦелевое расположение: место, куда помещать подходящий файл и подписи. \nНа подпись: отображать файлы из директории прри нажатии ЛКМ на значке в трее.')
         font = self.instruction_label.font()
         font.setPointSize(10)
         self.instruction_label.setFont(font)
         layout.addWidget(self.instruction_label)
-        self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(['Исходное расположение', 'Паттерны', 'Целевое расположение'])
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(['Исходное расположение', 'Паттерны', 'Целевое расположение', 'На подпись'])
         layout.addWidget(self.table)
 
         button_layout = QHBoxLayout()
@@ -598,7 +661,7 @@ class RulesDialog(QDialog):
         self.resize_columns_to_max_width()
 
     def resize_columns_to_max_width(self):
-        max_width = 600
+        max_width = 700
         for column in range(self.table.columnCount()):
             width = self.table.columnWidth(column)
             if width > max_width:
@@ -622,8 +685,8 @@ class RulesDialog(QDialog):
             self.table.setRowCount(0)
             for line in lines:
                 parts = line.strip().split('|')
-                if len(parts) == 3:
-                    self.add_row(parts[0], parts[1], parts[2])
+                if len(parts) == 4:
+                    self.add_row(parts[0], parts[1], parts[2], parts[3])
             self.resize_columns_to_max_width()
 
     def save_rules(self):
@@ -632,14 +695,16 @@ class RulesDialog(QDialog):
                 source_dir = self.table.item(row, 0).text()
                 patterns = self.table.item(row, 1).text()
                 dest_dir = self.table.item(row, 2).text()
-                file.write(f'{source_dir}|{patterns}|{dest_dir}\n')
+                for_sign = self.table.item(row, 3).text()
+                file.write(f'{source_dir}|{patterns}|{dest_dir}|{for_sign}\n')
 
-    def add_row(self, source_dir='', patterns='', dest_dir=''):
+    def add_row(self, source_dir='', patterns='', dest_dir='', for_sign=''):
         row_position = self.table.rowCount()
         self.table.insertRow(row_position)
         self.table.setItem(row_position, 0, QTableWidgetItem(source_dir))
         self.table.setItem(row_position, 1, QTableWidgetItem(patterns))
         self.table.setItem(row_position, 2, QTableWidgetItem(dest_dir))
+        self.table.setItem(row_position, 3, QTableWidgetItem(for_sign))
 
     def del_row(self):
         row_position = self.table.currentRow()
@@ -676,3 +741,66 @@ class QueueMonitorThread(QThread):
                 break
             self.file_path_signal.emit(file_path)
             file_paths_queue.task_done()
+
+
+class SignAllFilesThread(QThread):
+    result = Signal(dict, object, object)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+    def run(self):
+        res_total = 0
+        fuckuped_files = {}
+        redlist = []
+        greenlist = []
+        for index in range(self.parent().file_list.count()):
+            res, err, fp = self.sign_file(index)
+            if res:
+                res_total += res
+                fuckuped_files[fp] = str(err)
+                redlist.append(index)
+            else:
+                greenlist.append(index)
+        self.result.emit(fuckuped_files, redlist, greenlist)
+
+    def sign_file(self, index):
+        return self.parent().sign_file(index)
+
+
+class SignFileThread(QThread):
+    result = Signal(bool, str, int)
+
+    def __init__(self, index, parent=None):
+        super().__init__(parent)
+        self.index = index
+
+    def run(self):
+        res, err, fp = self.sign_file(self.index)
+        self.result.emit(res, err, self.index)
+
+    def sign_file(self, index):
+        return self.parent().sign_file(index)
+
+
+class FileWatchHandler(FileSystemEventHandler):
+    def __init__(self, notify_callback):
+        super().__init__()
+        self.notify_callback = notify_callback
+
+    def on_created(self, event):
+        if not event.is_directory:
+            self.notify_callback(event.src_path)
+
+
+class FileWatcher:
+    def __init__(self, directory_to_watch, notify_callback):
+        self.observer = Observer()
+        self.directory_to_watch = fr'{directory_to_watch}'
+        print(directory_to_watch)
+        self.notify_callback = notify_callback
+
+    def run(self):
+        event_handler = FileWatchHandler(self.notify_callback)
+        self.observer.schedule(event_handler, self.directory_to_watch, recursive=False)
+        self.observer.start()

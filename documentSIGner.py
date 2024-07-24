@@ -8,7 +8,7 @@ from glob import glob
 import time
 import logging
 import socket
-from main_functions import resource_path, add_to_context_menu, remove_from_context_menu, RulesDialog, config, save_config, send_file_path_to_existing_instance, file_paths_queue, QueueMonitorThread, FileDialog, handle_dropped_files
+from main_functions import resource_path, FileWatcher, add_to_context_menu, remove_from_context_menu, RulesDialog, config, save_config, send_file_path_to_existing_instance, file_paths_queue, QueueMonitorThread, FileDialog, handle_dropped_files
 import msvcrt
 import os
 import fnmatch
@@ -29,10 +29,13 @@ def exception_hook(exc_type, exc_value, exc_traceback):
 
 
 class SystemTrayGui(QtWidgets.QSystemTrayIcon):
+    global qt_app
     def __init__(self, icon, parent=None):
         QtWidgets.QSystemTrayIcon.__init__(self, icon, parent)
         self.activated.connect(self.show_menu)
         self.soed = None
+        self.notifiers = []
+        self.messageClicked.connect(self.show_menu)
         self.dialog = FileDialog([])
         confirmations_path = os.path.join(os.path.dirname(sys.argv[0]), 'confirmations')
         if os.path.exists(confirmations_path):
@@ -60,6 +63,12 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.toggle_autorun.setCheckable(True)
         self.toggle_autorun.setChecked(config['autorun'])
         self.toggle_autorun.triggered.connect(self.toggle_startup)
+
+        self.toggle_notify = menu.addAction("Уведомлять о новых")
+        self.toggle_notify.setCheckable(True)
+        self.toggle_notify.setChecked(config.get('notify', False))
+        self.toggle_notify.triggered.connect(self.toggle_notifier)
+
         self.open_rules_window = menu.addAction("Меню правил")
         self.open_rules_window.triggered.connect(self.open_rules)
 
@@ -88,7 +97,6 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.default_page_menu.addAction(self.radio_all)
         # Добавляем подменю в основное меню
         menu.addMenu(self.default_page_menu)
-
         exit_action = menu.addAction("Выход")
         exit_action.triggered.connect(self.exit)
         self.setContextMenu(menu)
@@ -119,15 +127,13 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.queue_thread = QueueMonitorThread()
         self.queue_thread.file_path_signal.connect(self.add_file_to_list)
         self.queue_thread.start()
+        if config['notify']:
+            self.create_notifiers()
 
     def add_file_to_list(self, file_path):
-        if self.dialog:
-            self.dialog.append_new_file_to_list(file_path)
-            self.dialog.show()
-            self.dialog.activateWindow()
-        # else:
-        #     self.dialog.show()
-        #     self.dialog.activateWindow()
+        self.dialog.append_new_file_to_list(file_path)
+        self.dialog.show()
+        self.dialog.activateWindow()
 
     def set_default_page(self, page):
         config['default_page'] = page
@@ -147,11 +153,22 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
             else:
                 os.rename(file_path, f"declined_{file_name}")
 
-    def show_menu(self, reason):
+    def show_menu(self, reason=QtWidgets.QSystemTrayIcon.Trigger):
+        if self.dialog.isVisible():
+            self.dialog.activateWindow()
+            return
         if reason == QtWidgets.QSystemTrayIcon.Trigger:
             file_list_for_sign = self.get_list_for_sign()
-            for fp in file_list_for_sign:
-                self.add_file_to_list(fp)
+            if file_list_for_sign:
+                for fp in file_list_for_sign:
+                    self.add_file_to_list(fp)
+            else:
+                self.showMessage(
+                    "Пусто",
+                    "Документов на подпись не обнаружено.",
+                    QtWidgets.QSystemTrayIcon.Information,
+                    300  # Время отображения уведомления в миллисекундах
+                )
 
     def get_list_for_sign(self):
         matching_files = []
@@ -162,11 +179,11 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         else:
             self.rules = []
         for rule in self.rules:
-            source_dir, patterns, _ = rule.strip().split('|')
+            source_dir, patterns, _, for_sign_dir = rule.strip().split('|')
             patterns_list = patterns.split(';')
             # Получение всех файлов в корневой директории
             for file_name in os.listdir(source_dir):
-                if file_name in ['Thumbs.db']:
+                if file_name in ['Thumbs.db', "desktop.ini"] or for_sign_dir == 'нет':
                     continue
                 file_path = os.path.join(source_dir, file_name)
                 # Пропускаем файлы с окончанием .sig
@@ -254,6 +271,38 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         msg_box.setWindowFlags(msg_box.windowFlags() | QtCore.Qt.WindowStaysOnTopHint)
         return_value = msg_box.exec()
         return return_value == QtWidgets.QMessageBox.Yes
+
+    def toggle_notifier(self):
+        if self.toggle_notify.isChecked():
+            self.create_notifiers()
+            config['notify'] = True
+        else:
+            self.notifiers = []
+            config['notify'] = False
+        save_config()
+
+    def create_notifiers(self):
+        self.notifiers = []  # Останавливаем предыдущие наблюдатели перед созданием новых
+        if os.path.exists(self.rules_file):
+            with open(self.rules_file, 'r') as file:
+                rules = file.readlines()
+        else:
+            rules = []
+        for rule in rules:
+            source_dir, _, _, for_sign_dir = rule.strip().split('|')
+            if for_sign_dir == 'да':
+                watcher = FileWatcher(source_dir, self.notify_new_file)
+                thread = Thread(target=watcher.run, daemon=True)
+                thread.start()
+                self.notifiers.append((watcher, thread))
+
+    def notify_new_file(self, fp):
+        self.showMessage(
+            "Получен новый файл на подпись.",
+            f"{os.path.basename(fp)}\n(нажмите здесь, чтобы открыть меню подписи)",
+            QtWidgets.QSystemTrayIcon.Information,
+            300  # Время отображения уведомления в миллисекундах
+        )
 
     def run_socket_server(self):
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
