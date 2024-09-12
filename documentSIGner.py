@@ -14,7 +14,7 @@ import os
 import fnmatch
 import winshell
 
-# C:\Users\CourtUser\Desktop\release\DocumentSIGner\venv\Scripts\pyinstaller.exe --windowed --console --noconfirm --icon "C:\Users\CourtUser\Desktop\release\DocumentSIGner\icons8-legal-document-64.ico" --add-data "C:\Users\CourtUser\Desktop\release\DocumentSIGner\icons8-legal-document-64.ico;." --add-data "C:\Users\CourtUser\Desktop\release\DocumentSIGner\dcs.png;."  C:\Users\CourtUser\Desktop\release\DocumentSIGner\documentSIGner.py
+# C:\Users\CourtUser\Desktop\release\DocumentSIGner\venv\Scripts\pyinstaller.exe --windowed --noconfirm --icon "C:\Users\CourtUser\Desktop\release\DocumentSIGner\icons8-legal-document-64.ico" --add-data "C:\Users\CourtUser\Desktop\release\DocumentSIGner\icons8-legal-document-64.ico;." --add-data "C:\Users\CourtUser\Desktop\release\DocumentSIGner\DocumentSISner_update_and_start.bat;." --add-data "C:\Users\CourtUser\Desktop\release\DocumentSIGner\dcs.png;."  C:\Users\CourtUser\Desktop\release\DocumentSIGner\documentSIGner.py
 
 
 def exception_hook(exc_type, exc_value, exc_traceback):
@@ -183,6 +183,9 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
             patterns_list = patterns.split(';')
             # Получение всех файлов в корневой директории
             for file_name in os.listdir(source_dir):
+                # Пропускаем повторяющийся файл
+                if file_path in matching_files:
+                    continue
                 if file_name in ['Thumbs.db', "desktop.ini"] or for_sign_dir == 'нет':
                     continue
                 file_path = os.path.join(source_dir, file_name)
