@@ -183,12 +183,12 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
             patterns_list = patterns.split(';')
             # Получение всех файлов в корневой директории
             for file_name in os.listdir(source_dir):
-                # Пропускаем повторяющийся файл
-                if file_path in matching_files:
-                    continue
                 if file_name in ['Thumbs.db', "desktop.ini"] or for_sign_dir == 'нет':
                     continue
                 file_path = os.path.join(source_dir, file_name)
+                # Пропускаем повторяющийся файл
+                if file_path in matching_files:
+                    continue
                 # Пропускаем файлы с окончанием .sig
                 if file_name.endswith('.sig') or os.path.isdir(file_path):
                     continue
