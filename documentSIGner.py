@@ -200,8 +200,7 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         return matching_files
 
     def open_rules(self):
-        rules_file = os.path.join(os.path.dirname(sys.argv[0]), 'rules.txt')
-        self.rules_dialog = RulesDialog(rules_file)
+        self.rules_dialog = RulesDialog(self.rules_file)
         self.rules_dialog.show()
         self.rules_dialog.activateWindow()
 
