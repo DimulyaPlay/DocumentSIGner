@@ -328,6 +328,8 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
                     file_paths_queue.put(file_path)
 
     def exit(self):
+        if first_instance:
+            lock_file.close()
         QtWidgets.QApplication.quit()
 
 
@@ -378,9 +380,6 @@ if __name__ == '__main__':
             file_paths = sys.argv[1:]
             file_paths_queue.put(file_paths[0])
         from flask_app import *
-        logging.getLogger("PySide2").setLevel(logging.WARNING)
-        log_path = os.path.join(os.path.dirname(sys.argv[0]), 'log.log')
-        logging.basicConfig(filename=log_path, level=logging.ERROR)
         sys.excepthook = exception_hook
         certs_data = get_cert_data()
         main()

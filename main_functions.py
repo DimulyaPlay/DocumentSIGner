@@ -262,6 +262,7 @@ def delete_registry_key(key, key_path):
     except Exception as e:
         print(f"Failed to delete registry key: {e}")
 
+
 def add_stamp_to_pages(pdf_path, modified_stamp_path, pagelist):
     doc = fitz.open(pdf_path)
     img_stamp = fitz.Pixmap(modified_stamp_path)  # Загружаем изображение
@@ -299,6 +300,7 @@ def add_stamp_to_pages(pdf_path, modified_stamp_path, pagelist):
             doc[page_index].insert_image(img_rect, pixmap=img_stamp)
     doc.saveIncr()
     return pdf_path
+
 
 def resource_path(relative_path):
     """ Возвращает корректный путь для доступа к ресурсам для PyInstaller """
@@ -412,7 +414,7 @@ class CustomListWidgetItem(QWidget):
             return self.file_path
 
     def set_file_label_background(self, color):
-        self.file_label.setStyleSheet(f'background-color: {color}; border-radius: 4px; padding-left: 3px; padding-right: 3px;')
+        self.file_label.setStyleSheet(f'background-color: {color}; border-radius: 4px; padding-left: 3px; padding-right: 3px; margin-right: 3px')
 
     def open_in_explorer(self, filepath: str):
         """
@@ -530,25 +532,11 @@ class FileDialog(QDialog):
             self.block_buttons(True)
             self.loading_label.setMovie(self.movie)
             self.movie.start()
-            for fts in files_to_sign:
-                # Передаем список индексов файлов для подписания
-                self.thread = SignFileThread(fts, self)
-                self.thread.result.connect(self.on_sign_result)
-                self.thread.start()
+            self.thread = SignAllFilesThread(self, files_to_sign)
+            self.thread.result.connect(self.on_sign_all_result)
+            self.thread.start()
         else:
             QMessageBox.information(self, 'Ничего не выбрано', 'Выберите документы для подписи.')
-
-    def on_sign_result(self, res, err, index):
-        item = self.file_list.item(index)
-        widget = self.file_list.itemWidget(item)
-        self.movie.stop()
-        self.loading_label.clear()
-        self.block_buttons(False)
-        if res:
-            QMessageBox.warning(self, 'Ошибка', f'Возникла ошибка при подписании:\n{err}')
-            widget.set_file_label_background("rgba(255, 0, 0, 128)")
-        else:
-            widget.set_file_label_background("rgba(0, 128, 0, 128)")
 
     def on_sign_all_result(self, fuckuped_files, index_list_red, index_list_green):
         self.movie.stop()
@@ -557,12 +545,12 @@ class FileDialog(QDialog):
         for idx in index_list_green:
             item = self.file_list.item(idx)
             widget = self.file_list.itemWidget(item)
-            widget.set_file_label_background("green")
+            widget.set_file_label_background("rgba(0, 128, 0, 128)")
         if fuckuped_files:
             for idx in index_list_red:
                 item = self.file_list.item(idx)
                 widget = self.file_list.itemWidget(item)
-                widget.set_file_label_background("red")
+                widget.set_file_label_background("rgba(255, 0, 0, 128)")
             msg_lst = [f'{os.path.basename(fp)}-{err}' for fp, err in fuckuped_files.items()]
             msg_str = '\n'.join(msg_lst)
             QMessageBox.warning(self, 'Ошибка', f'Возникли ошибки со следующими документами:\n{msg_str}')
@@ -817,15 +805,17 @@ class QueueMonitorThread(QThread):
 class SignAllFilesThread(QThread):
     result = Signal(dict, object, object)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, indexes=None):
         super().__init__(parent)
+        self.indexes = indexes
 
     def run(self):
         res_total = 0
         fuckuped_files = {}
         redlist = []
         greenlist = []
-        for index in range(self.parent().file_list.count()):
+        file_index_list = self.indexes if self.indexes else range(self.parent().file_list.count())
+        for index in file_index_list:
             res, err, fp = self.sign_file(index)
             if res:
                 res_total += res
