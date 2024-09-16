@@ -8,7 +8,7 @@ from glob import glob
 import time
 import logging
 import socket
-from main_functions import resource_path, FileWatcher, add_to_context_menu, remove_from_context_menu, RulesDialog, config, save_config, send_file_path_to_existing_instance, file_paths_queue, QueueMonitorThread, FileDialog, handle_dropped_files
+from main_functions import resource_path, config_folder, FileWatcher, add_to_context_menu, remove_from_context_menu, RulesDialog, config, save_config, send_file_path_to_existing_instance, file_paths_queue, QueueMonitorThread, FileDialog, handle_dropped_files
 import msvcrt
 import os
 import fnmatch
@@ -44,7 +44,7 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
                 os.remove(file)
         else:
             os.mkdir(confirmations_path)
-        self.rules_file = os.path.join(os.path.dirname(sys.argv[0]), 'rules.txt')
+        self.rules_file = os.path.join(config_folder, 'rules.txt')
         menu = QtWidgets.QMenu(parent)
         self.toggle_soed_server = menu.addAction("СО ЭД сервер")
         self.toggle_soed_server.setCheckable(True)
