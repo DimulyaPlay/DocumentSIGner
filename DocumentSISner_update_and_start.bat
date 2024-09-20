@@ -1,11 +1,10 @@
 @Echo off
 chcp 65001 >nul
-echo Подключение сетевого диска...
-net use X: \\srsfemida\1$\DocumentSIGner\ /persistent:no
+echo Проверка обновлений и запуск...
+net use X: \\srsfemida\1$\reference_clients\DocumentSIGner\
 if %errorlevel% neq 0 (
     echo Ошибка: Не удалось подключить сетевой диск.
 ) else (
-    echo Сетевой диск подключен успешно.
     echo Обновление файлов...
     xcopy X:\ /D /E /Y >nul
     if %errorlevel% neq 0 (
@@ -13,7 +12,7 @@ if %errorlevel% neq 0 (
     ) else (
         echo Файлы успешно обновлены.
     )
-    echo Отключение сетевого диска...
+    echo Проверка завершена...
     net use /delete X: /YES
 )
 

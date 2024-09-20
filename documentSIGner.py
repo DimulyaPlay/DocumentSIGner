@@ -1,7 +1,7 @@
 import shutil
 import sys
 from PySide2 import QtWidgets, QtGui, QtCore
-from PySide2.QtCore import QTranslator, QLocale, QLibraryInfo
+from PySide2.QtCore import QTranslator, QLocale, QLibraryInfo, Signal, Slot
 from widget_ui import Ui_MainWindow
 from threading import Thread
 from glob import glob
@@ -29,6 +29,8 @@ def exception_hook(exc_type, exc_value, exc_traceback):
 
 
 class SystemTrayGui(QtWidgets.QSystemTrayIcon):
+    confirm_signing_signal = Signal(str, object)
+
     global qt_app
     def __init__(self, icon, parent=None):
         QtWidgets.QSystemTrayIcon.__init__(self, icon, parent)
@@ -36,6 +38,7 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.soed = None
         self.notifiers = []
         self.messageClicked.connect(self.show_menu)
+        self.confirm_signing_signal.connect(self.confirm_signing)
         self.dialog = FileDialog([])
         confirmations_path = os.path.join(os.path.dirname(sys.argv[0]), 'confirmations')
         if os.path.exists(confirmations_path):
@@ -100,9 +103,6 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         exit_action = menu.addAction("Выход")
         exit_action.triggered.connect(self.exit)
         self.setContextMenu(menu)
-        self.timer = QtCore.QTimer(self)
-        self.timer.timeout.connect(self.check_for_sign_requests)
-        self.timer.start(1000)  # Проверка каждую секунду
         self.widget = QtWidgets.QMainWindow()
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self.widget)
@@ -143,15 +143,6 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.radio_first.setChecked(page == 1)
         self.radio_last.setChecked(page == 2)
         self.radio_all.setChecked(page == 3)
-
-    def check_for_sign_requests(self):
-        for file_path in glob("confirmations/waiting_*"):
-            file_name = file_path.split("_", 1)[1]
-            user_decision = self.confirm_signing(file_name)
-            if user_decision:
-                os.rename(file_path, f"accepted_{file_name}")
-            else:
-                os.rename(file_path, f"declined_{file_name}")
 
     def show_menu(self, reason=QtWidgets.QSystemTrayIcon.Trigger):
         if self.dialog.isVisible():
@@ -263,7 +254,8 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
             config['context_menu'] = False
         save_config()
 
-    def confirm_signing(self, file_name):
+    @Slot(str)
+    def confirm_signing(self, file_name, signing_queue):
         msg_box = QtWidgets.QMessageBox()
         msg_box.setWindowIcon(QtGui.QIcon(resource_path('icons8-legal-document-64.ico')))
         msg_box.setIcon(QtWidgets.QMessageBox.Question)
@@ -272,7 +264,15 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         msg_box.setStandardButtons(QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
         msg_box.setWindowFlags(msg_box.windowFlags() | QtCore.Qt.WindowStaysOnTopHint)
         return_value = msg_box.exec()
-        return return_value == QtWidgets.QMessageBox.Yes
+        # Генерируем сигнал с детализированным результатом
+        if return_value == QtWidgets.QMessageBox.Yes:
+            result = "accepted"
+        elif return_value == QtWidgets.QMessageBox.No:
+            result = "declined"
+        else:
+            result = "closed"  # Если пользователь закрыл окно без выбора
+        signing_queue.put((file_name, result))
+
 
     def toggle_notifier(self):
         if self.toggle_notify.isChecked():
@@ -353,6 +353,7 @@ def main():
     qt_app.installTranslator(translator)
     global tray_gui
     tray_gui = SystemTrayGui(QtGui.QIcon(resource_path('icons8-legal-document-64.ico')))
+    app.tray_gui = tray_gui
     tray_gui.show()
     sys.exit(qt_app.exec_())
 
