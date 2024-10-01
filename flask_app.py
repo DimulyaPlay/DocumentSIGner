@@ -1,4 +1,4 @@
-from main_functions import get_cert_data, config, sign_document
+from main_functions import get_cert_data, config, sign_document, check_chosen_pages
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -75,6 +75,7 @@ def sign_file():
                     zipf.write(filepath_to_sign, os.path.basename(filepath_to_sign))
                     zipf.write(filepath_sig, os.path.basename(filepath_sig))
                     zipf.write(filepath_to_stamp, os.path.basename(filepath_to_stamp))
+                print('Успешное подписание, отправка архива')
                 return send_file(zip_to_send, as_attachment=True)
             else:
                 message = 'Не удалось подписать документ'
@@ -83,10 +84,3 @@ def sign_file():
     except Exception as e:
         traceback.print_exc()
         return jsonify({'error': True, 'message': f'Не удалось подписать документ: {e}'})
-
-
-
-    except Exception as e:
-        traceback.print_exc()
-        message = f'Не удалось подписать документ: {e}'
-        return jsonify({'error': True, 'message': message})

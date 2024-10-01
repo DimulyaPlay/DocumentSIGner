@@ -1,5 +1,7 @@
 import shutil
 import sys
+import traceback
+import requests
 from PySide2 import QtWidgets, QtGui, QtCore
 from PySide2.QtCore import QTranslator, QLocale, QLibraryInfo, Signal, Slot
 from widget_ui import Ui_MainWindow
@@ -8,7 +10,7 @@ from glob import glob
 import time
 import logging
 import socket
-from main_functions import resource_path, config_folder, FileWatcher, add_to_context_menu, remove_from_context_menu, RulesDialog, config, save_config, send_file_path_to_existing_instance, file_paths_queue, QueueMonitorThread, FileDialog, handle_dropped_files
+from main_functions import resource_path, check_api_key, config_folder, FileWatcher, add_to_context_menu, remove_from_context_menu, RulesDialog, config, save_config, send_file_path_to_existing_instance, file_paths_queue, QueueMonitorThread, FileDialog, handle_dropped_files
 import msvcrt
 import os
 import fnmatch
@@ -37,6 +39,10 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.activated.connect(self.show_menu)
         self.soed = None
         self.notifiers = []
+        self.downloaded_server_files = {}
+        self.current_session_soed_files = os.path.join(os.path.dirname(sys.argv[0]), 'downloaded_soed_files')
+        shutil.rmtree(self.current_session_soed_files, ignore_errors=True)
+        os.makedirs(self.current_session_soed_files, exist_ok=True)
         self.messageClicked.connect(self.show_menu)
         self.confirm_signing_signal.connect(self.confirm_signing)
         self.dialog = FileDialog([])
@@ -129,11 +135,28 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.queue_thread.start()
         if config['notify']:
             self.create_notifiers()
+        # Инициализация таймера
+        ip_server = config.get('soed_url', None)
+        port_server = config.get('soed_port', None)
+        # Проверка наличия URL и порта
+        if ip_server and port_server:
+            print('soed checking active')
+            self.timer = QtCore.QTimer(self)
+            self.timer.timeout.connect(self.fetch_files_from_server)
+            # Запуск таймера (интервал 1.65 минут = 100000 миллисекунд)
+            self.timer.start(100000)
 
-    def add_file_to_list(self, file_path):
-        self.dialog.append_new_file_to_list(file_path)
-        self.dialog.show()
-        self.dialog.activateWindow()
+    def add_file_to_list(self, file_path, online_file_id=None, online_file_attr=None):
+        if file_path == 'activate':
+            self.show_menu()
+            return
+        if online_file_id:
+            self.dialog.append_new_online_file_to_list(online_file_id, online_file_attr)
+        else:
+            self.dialog.append_new_file_to_list(file_path)
+        if not self.dialog.isActiveWindow() or self.dialog.isHidden():
+            self.dialog.show()
+            self.dialog.activateWindow()
 
     def set_default_page(self, page):
         config['default_page'] = page
@@ -145,50 +168,67 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.radio_all.setChecked(page == 3)
 
     def show_menu(self, reason=QtWidgets.QSystemTrayIcon.Trigger):
-        if self.dialog.isVisible():
-            self.dialog.activateWindow()
-            return
-        if reason == QtWidgets.QSystemTrayIcon.Trigger:
-            file_list_for_sign = self.get_list_for_sign()
-            if file_list_for_sign:
-                for fp in file_list_for_sign:
-                    self.add_file_to_list(fp)
-            else:
-                self.showMessage(
-                    "Пусто",
-                    "Документов на подпись не обнаружено.",
-                    QtWidgets.QSystemTrayIcon.Information,
-                    300  # Время отображения уведомления в миллисекундах
-                )
+        ip_server = config.get('soed_url', None)
+        port_server = config.get('soed_port', None)
+        # Проверка наличия URL и порта
+        if ip_server and port_server:
+            self.fetch_files_from_server()
+        try:
+            if self.dialog.isVisible():
+                self.dialog.activateWindow()
+                return
+            if reason == QtWidgets.QSystemTrayIcon.Trigger:
+                file_list_for_sign = self.get_list_for_sign()
+                if file_list_for_sign or self.downloaded_server_files:
+                    if self.downloaded_server_files:
+                        for k, v in self.downloaded_server_files.items():
+                            self.add_file_to_list(v['filePath'], k, v)
+                    for fp in file_list_for_sign:
+                        self.add_file_to_list(fp)
+                    self.dialog.show()
+                    self.dialog.activateWindow()
+                else:
+                    self.showMessage(
+                        "Пусто",
+                        "Документов на подпись не обнаружено.",
+                        QtWidgets.QSystemTrayIcon.Information,
+                        300  # Время отображения уведомления в миллисекундах
+                    )
+        except:
+            traceback.print_exc()
 
     def get_list_for_sign(self):
-        matching_files = []
-        # Загрузка и проверка файла по правилам из rules.txt
-        if os.path.exists(self.rules_file):
-            with open(self.rules_file, 'r') as file:
-                self.rules = file.readlines()
-        else:
-            self.rules = []
-        for rule in self.rules:
-            source_dir, patterns, _, for_sign_dir = rule.strip().split('|')
-            patterns_list = patterns.split(';')
-            # Получение всех файлов в корневой директории
-            for file_name in os.listdir(source_dir):
-                if file_name in ['Thumbs.db', "desktop.ini"] or for_sign_dir == 'нет':
-                    continue
-                file_path = os.path.join(source_dir, file_name)
-                # Пропускаем повторяющийся файл
-                if file_path in matching_files:
-                    continue
-                # Пропускаем файлы с окончанием .sig
-                if file_name.endswith('.sig') or os.path.isdir(file_path):
-                    continue
-                # Пропускаем файлы, у которых есть копия с окончанием .sig
-                sig_file_path = file_path + '.sig'
-                if os.path.exists(sig_file_path):
-                    continue
-                matching_files.append(file_path)
-        return matching_files
+        try:
+            matching_files = []
+            # Загрузка и проверка файла по правилам из rules.txt
+            if os.path.exists(self.rules_file):
+                with open(self.rules_file, 'r') as file:
+                    self.rules = file.readlines()
+            else:
+                self.rules = []
+            for rule in self.rules:
+                source_dir, _, _, for_sign_dir = rule.strip().split('|')
+                print('checking dir', source_dir)
+                # Получение всех файлов в корневой директории
+                for file_name in os.listdir(source_dir):
+                    if file_name in ['Thumbs.db', "desktop.ini"] or for_sign_dir == 'нет' or file_name.startswith(('gf_', '~')):
+                        continue
+                    file_path = os.path.join(source_dir, file_name)
+                    if file_path in matching_files:
+                        continue
+                    # Пропускаем файлы с окончанием .sig
+                    if file_name.endswith('.sig') or os.path.isdir(file_path):
+                        continue
+                    # Пропускаем файлы, у которых есть копия с окончанием .sig
+                    sig_file_path = file_path + '.sig'
+                    if os.path.exists(sig_file_path):
+                        continue
+                    print('found file', file_path)
+                    matching_files.append(file_path)
+            return matching_files
+        except:
+            traceback.print_exc()
+            return []
 
     def open_rules(self):
         self.rules_dialog = RulesDialog(self.rules_file)
@@ -226,16 +266,105 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         save_config()
 
     def toggle_soed(self):
+        text, ok = QtWidgets.QInputDialog.getText(None, 'Подключение по api.', 'Введите api ключ:')
+        if ok and text:
+            ok, url, port = check_api_key(text)
+            if ok:
+                config['soed_url'] = url
+                config['soed_port'] = port
+                config['api_key'] = text
+                QtWidgets.QMessageBox.information(None, "Успех", 'Ключ сохранен')
+            else:
+                QtWidgets.QMessageBox.warning(None, "Успех", 'Ключ не прошел проверку')
         if self.toggle_soed_server.isChecked():
             self.soed = Thread(target=run_flask, daemon=True)
             self.soed.start()
             config['soed'] = True
             self.setToolTip(f'DocumentSIGner на порту {config["port"]}')
         else:
+
             self.soed = None
             config['soed'] = False
             self.setToolTip(f'DocumentSIGner отключен от сети.')
         save_config()
+
+    def fetch_files_from_server(self):
+        """
+        Функция для получения файлов с сервера и загрузки недостающих файлов.
+        """
+        ip_server = config.get('soed_url', None)
+        port_server = config.get('soed_port', None)
+        # Проверка наличия URL и порта
+        if ip_server and port_server:
+            url = f"https://{ip_server}:{port_server}/ext/judge-files"
+            headers = {'X-API-KEY': config['api_key']}
+            try:
+                # Отправка GET-запроса на получение списка файлов
+                response = requests.get(url, headers=headers, verify=False, proxies={'http': False, 'https': False})
+                if response.status_code == 200:
+                    # Обновляем список файлов с сервера
+                    new_server_files = response.json().get('files', [])
+                    # Перебираем файлы с сервера и проверяем наличие на клиенте
+                    for file_info in new_server_files:
+                        file_name = file_info['fileName']
+                        file_id = file_info['id']
+                        sig_pages = file_info['sigPages']
+                        # Проверка, скачан ли уже файл (можно хранить в `self.downloaded_files`)
+                        if file_id not in self.downloaded_server_files:
+                            # Если файл не загружен, загружаем его
+                            file_path = self.download_file(file_id, file_name)
+                            if file_path:  # Уведомляем о новом загруженном файле
+                                self.downloaded_server_files[file_id] = {'fileName': file_name,
+                                                                         'sigPages': sig_pages,
+                                                                         'filePath': file_path}
+                                self.notify_new_file(file_path)
+                            print(f"Список файлов обновлен: {self.downloaded_server_files}")
+                    # Список идентификаторов файлов, которые пришли с сервера
+                    current_server_file_ids = {file_info['id'] for file_info in new_server_files}
+
+                    # Удаление файлов, которые есть в `self.downloaded_server_files`, но отсутствуют на сервере
+                    files_to_remove = [file_id for file_id in self.downloaded_server_files if
+                                       file_id not in current_server_file_ids]
+                    for file_id in files_to_remove:
+                        del self.downloaded_server_files[file_id]
+                        print(f"Файл {file_id} удален из списка загруженных, так как отсутствует на сервере.")
+                else:
+                    print(f"Ошибка получения данных: {response.status_code}, {response.text}")
+            except requests.RequestException as e:
+                print(f"Ошибка подключения: {e}")
+
+    def download_file(self, file_id, file_name):
+        """
+        Функция для загрузки файла с сервера по его ID.
+        Возвращает путь к загруженному файлу.
+        """
+        ip_server = config.get('soed_url', None)
+        port_server = config.get('soed_port', None)
+        # Проверка наличия URL и порта
+        if ip_server and port_server:
+            url = f"https://{ip_server}:{port_server}/ext/get-file"
+            headers = {'X-API-KEY': config['api_key']}
+            params = {'file_id': file_id}
+            try:
+                # Отправляем GET-запрос на получение файла
+                response = requests.get(url, headers=headers, params=params, stream=True, verify=False,
+                                        proxies={'http': False, 'https': False})
+                if response.status_code == 200:
+                    # Путь для сохранения загруженного файла (можно настроить по необходимости)
+                    local_file_path = os.path.join(self.current_session_soed_files, str(file_id) + "_" + file_name)
+                    # Сохранение файла
+                    with open(local_file_path, 'wb') as file:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            if chunk:
+                                file.write(chunk)
+                    print(f"Файл {file_name} успешно загружен.")
+                    return local_file_path
+                else:
+                    print(f"Ошибка загрузки файла {file_name}: {response.status_code}, {response.text}")
+            except requests.RequestException as e:
+                print(f"Ошибка подключения при загрузке файла: {e}")
+
+        return None
 
     def toggle_stamp(self):
         if self.toggle_stamp_on_original.isChecked():
@@ -260,7 +389,7 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         msg_box.setWindowIcon(QtGui.QIcon(resource_path('icons8-legal-document-64.ico')))
         msg_box.setIcon(QtWidgets.QMessageBox.Question)
         msg_box.setWindowTitle("Получен запрос на подпись.")
-        msg_box.setText(f"Вы хотите подписать файл {file_name}?")
+        msg_box.setText(f"Вы хотите подписать файл {os.path.basename(file_name)}?")
         msg_box.setStandardButtons(QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
         msg_box.setWindowFlags(msg_box.windowFlags() | QtCore.Qt.WindowStaysOnTopHint)
         return_value = msg_box.exec()
@@ -303,7 +432,7 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
             "Получен новый файл на подпись.",
             f"{os.path.basename(fp)}\n(нажмите здесь, чтобы открыть меню подписи)",
             QtWidgets.QSystemTrayIcon.Information,
-            300  # Время отображения уведомления в миллисекундах
+            3000  # Время отображения уведомления в миллисекундах
         )
 
     def run_socket_server(self):
@@ -335,6 +464,7 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
 def run_flask():
     app.run(host="127.0.0.1", port=config['port'], use_reloader=False, debug=False)
 
+
 def is_port_free():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         try:
@@ -342,6 +472,7 @@ def is_port_free():
             return True
         except OSError:
             return False
+
 
 def main():
     qt_app = QtWidgets.QApplication(sys.argv)
@@ -351,10 +482,17 @@ def main():
     path = QLibraryInfo.location(QLibraryInfo.TranslationsPath)  # Путь к переводам Qt
     translator.load("qtbase_" + locale, path)
     qt_app.installTranslator(translator)
+    qt_app.setStyle(QtWidgets.QStyleFactory.create("Fusion"))
     global tray_gui
     tray_gui = SystemTrayGui(QtGui.QIcon(resource_path('icons8-legal-document-64.ico')))
-    app.tray_gui = tray_gui
+    qt_app.tray_gui = tray_gui
     tray_gui.show()
+    tray_gui.showMessage(
+        "Приложение запущено.",
+        f"Нажмите на значок, чтобы открыть список документов на подпись",
+        QtWidgets.QSystemTrayIcon.Information,
+        3000  # Время отображения уведомления в миллисекундах
+    )
     sys.exit(qt_app.exec_())
 
 
@@ -373,6 +511,10 @@ if __name__ == '__main__':
         if len(sys.argv) > 1:
             file_paths = sys.argv[1:]
             result = send_file_path_to_existing_instance(file_paths)
+            if result:
+                sys.exit(0)
+        else:
+            result = send_file_path_to_existing_instance(['activate'])
             if result:
                 sys.exit(0)
     else:

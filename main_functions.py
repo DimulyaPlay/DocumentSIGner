@@ -12,9 +12,9 @@ from PIL import Image, ImageDraw, ImageFont
 import requests
 import tempfile
 import fitz
-import sys
+import base64
 import winreg as reg
-from PySide2.QtWidgets import QApplication, QAction, QDialog, QMenu, QVBoxLayout, QListWidget, QTableWidget, QTableWidgetItem, QListWidgetItem, QHBoxLayout, QLabel, QRadioButton, QLineEdit, QPushButton, QFileDialog, QWidget, QComboBox, QCheckBox, QMessageBox
+from PySide2.QtWidgets import QApplication, QAbstractItemView, QAction, QDialog, QMenu, QVBoxLayout, QListWidget, QTableWidget, QTableWidgetItem, QListWidgetItem, QHBoxLayout, QLabel, QRadioButton, QLineEdit, QPushButton, QFileDialog, QWidget, QComboBox, QCheckBox, QMessageBox
 from PySide2.QtCore import Qt, QThread, Signal
 from PySide2.QtGui import QIcon, QMovie
 from queue import Queue
@@ -22,6 +22,9 @@ import fnmatch
 import time
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+import urllib3
+import zipfile
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 config_folder = config_file = os.path.join(os.path.expanduser('~/Documents'), 'DocumentSIGner')
@@ -264,42 +267,71 @@ def delete_registry_key(key, key_path):
 
 
 def add_stamp_to_pages(pdf_path, modified_stamp_path, pagelist):
-    doc = fitz.open(pdf_path)
-    img_stamp = fitz.Pixmap(modified_stamp_path)  # Загружаем изображение
-    metadata = doc.metadata
-    # Проверка, был ли документ создан с помощью "Microsoft: Print To PDF"
-    is_microsoft_pdf = 'Microsoft: Print To PDF' in (metadata.get('producer', '') + metadata.get('creator', ''))
-    if pagelist == 'all':
-        for page in doc:
-            page.clean_contents()
-            img_width, img_height = img_stamp.width / 4.5, img_stamp.height / 4.5
-            page_width = page.rect.width
-            page_height = page.rect.height
-            x0 = (page_width / 2) - (img_width / 2)
-            y0 = page_height - img_height - 25
-            x1 = x0 + img_width
-            y1 = y0 + img_height
-            img_rect = fitz.Rect(x0, y0, x1, y1)
-            page.insert_image(img_rect, pixmap=img_stamp)
-    else:
-        for page in pagelist:
-            page = int(page)
-            page_index = page-1
-            if page == -1:
-                page_index = len(doc)-1
-            if is_microsoft_pdf:
-                doc[page_index].clean_contents()
-            img_width, img_height = img_stamp.width / 4.5, img_stamp.height / 4.5
-            page_width = doc[page_index].rect.width
-            page_height = doc[page_index].rect.height
-            x0 = (page_width / 2) - (img_width / 2)
-            y0 = page_height-img_height-25
-            x1 = x0 + img_width
-            y1 = y0 + img_height
-            img_rect = fitz.Rect(x0, y0, x1, y1)
-            doc[page_index].insert_image(img_rect, pixmap=img_stamp)
-    doc.saveIncr()
+    try:
+        doc = fitz.open(pdf_path)
+        img_stamp = fitz.Pixmap(modified_stamp_path)  # Загружаем изображение
+        metadata = doc.metadata
+        # Проверка, был ли документ создан с помощью "Microsoft: Print To PDF"
+        is_microsoft_pdf = 'Microsoft: Print To PDF' in (metadata.get('producer', '') + metadata.get('creator', ''))
+        print('Добавление штампа на страницы', pagelist)
+        if pagelist == 'all':
+            for page in doc:
+                page.clean_contents()
+                img_width, img_height = img_stamp.width / 4.5, img_stamp.height / 4.5
+                page_width = page.rect.width
+                page_height = page.rect.height
+                x0 = (page_width / 2) - (img_width / 2)
+                y0 = page_height - img_height - 25
+                x1 = x0 + img_width
+                y1 = y0 + img_height
+                img_rect = fitz.Rect(x0, y0, x1, y1)
+                page.insert_image(img_rect, pixmap=img_stamp)
+                print('штамп создан', x0, y0, x1, y1)
+        else:
+            for page in pagelist:
+                page = int(page)
+                page_index = page-1
+                if page == -1:
+                    page_index = len(doc)-1
+                if is_microsoft_pdf:
+                    doc[page_index].clean_contents()
+                img_width, img_height = img_stamp.width / 4.5, img_stamp.height / 4.5
+                page_width = doc[page_index].rect.width
+                page_height = doc[page_index].rect.height
+                x0 = (page_width / 2) - (img_width / 2)
+                y0 = page_height-img_height-25
+                x1 = x0 + img_width
+                y1 = y0 + img_height
+                img_rect = fitz.Rect(x0, y0, x1, y1)
+                doc[page_index].insert_image(img_rect, pixmap=img_stamp)
+                print('штамп создан', page_index, x0, y0, x1, y1)
+        doc.saveIncr()
+    except:
+        print('Не удалось добавить штамп на', pdf_path)
+        traceback.print_exc()
     return pdf_path
+
+
+def check_api_key(api_key):
+    try:
+        decoded_data = base64.b64decode(api_key).decode()
+        key_data = json.loads(decoded_data)
+        required_fields = ['url', 'port', 'username', 'api_key']
+        if not all(field in key_data for field in required_fields):
+            return False, None, None
+        url = key_data['url']
+        port = key_data['port']
+        try:
+            port = int(port)
+            if not (0 < port < 65536):
+                return False, None, None
+        except ValueError:
+            traceback.print_exc()
+            return False, None, None
+        return True, url, port
+    except (json.JSONDecodeError, base64.binascii.Error, KeyError):
+        traceback.print_exc()
+        return False, None, None
 
 
 def resource_path(relative_path):
@@ -326,22 +358,23 @@ def handle_dropped_files(file_paths, dialog=None):
 
 
 class CustomListWidgetItem(QWidget):
-    def __init__(self, file_path):
+    def __init__(self, file_path, file_id=None, name=None, sig_pages=None):
         super().__init__()
-
         layout = QHBoxLayout()
-        self.file_path = file_path
+        self.file_path = file_path.lower()
+        self.file_id = file_id
+        self.name = name
+        self.sig_pages = sig_pages
         self.page_fragment = ""  # Переменная для хранения найденного фрагмента
         self.chb = QCheckBox()
         layout.addWidget(self.chb)
         # Название файла
-        self.file_label = QLabel(os.path.basename(file_path))
+        self.file_label = QLabel(os.path.basename(file_path) if name is None else name)
         self.file_label.mouseDoubleClickEvent = self.open_file
         self.file_label.setMinimumWidth(440)
-        self.file_label.setToolTip(os.path.basename(file_path))
+        self.file_label.setToolTip(os.path.basename(file_path) if name is None else name)
         layout.addWidget(self.file_label)
         layout.addStretch()
-
         # Радиокнопки
         self.radio_none = QRadioButton("Нет")
         self.radio_none.setChecked(config.get('default_page', 2) == 0)
@@ -362,7 +395,6 @@ class CustomListWidgetItem(QWidget):
         layout.addWidget(self.radio_last)
         layout.addWidget(self.radio_all)
         layout.addWidget(self.radio_custom)
-
         # Поле для ввода своих страниц
         self.custom_pages = QLineEdit()
         self.custom_pages.setPlaceholderText("Введите страницы")
@@ -370,16 +402,17 @@ class CustomListWidgetItem(QWidget):
         self.custom_pages.textEdited.connect(lambda: self.radio_custom.setChecked(True))
         self.custom_pages.setFixedWidth(110)  # Фиксированная ширина
         layout.addWidget(self.custom_pages)
-
         self.setLayout(layout)
-
-        # Парсинг имени файла для страниц
         self.parse_file_name_for_pages()
-
-        # Добавляем обработку правой кнопки мыши
+        if self.sig_pages:
+            pagelist = check_chosen_pages(self.sig_pages)
+            print(pagelist)
+            if pagelist:
+                self.custom_pages.setText(', '.join(pagelist))
+        elif self.sig_pages is not None:
+            self.radio_none.setChecked(True)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
-
         self.setLayout(layout)
 
     def show_context_menu(self, pos):
@@ -388,8 +421,6 @@ class CustomListWidgetItem(QWidget):
         open_in_folder_action = QAction("Показать в папке", self)
         open_in_folder_action.triggered.connect(lambda: self.open_in_explorer(self.file_path))
         menu.addAction(open_in_folder_action)
-
-        # Показываем контекстное меню
         menu.exec_(self.mapToGlobal(pos))
 
     def open_file(self, event):
@@ -407,7 +438,6 @@ class CustomListWidgetItem(QWidget):
             self.radio_custom.setChecked(True)
 
     def get_clean_file_path(self):
-        # Возвращает имя файла без фрагмента страниц
         if self.page_fragment:
             return os.path.basename(self.file_path).replace(self.page_fragment, '')
         else:
@@ -435,7 +465,7 @@ class FileDialog(QDialog):
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(6, 6, 6, 6)
         self.layout.setSpacing(4)
-        self.resize(600, 400)
+        self.resize(600, 500)
         self.setMaximumWidth(1900)
         self.rules_file = os.path.join(config_folder, 'rules.txt')
         # Загрузка и проверка файла по правилам из rules.txt
@@ -453,6 +483,9 @@ class FileDialog(QDialog):
         self.layout.addWidget(self.instruction_label)
 
         self.file_list = QListWidget()
+        self.file_list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        vertical_scroll_bar = self.file_list.verticalScrollBar()
+        vertical_scroll_bar.setSingleStep(10)  # Значение в пикселях
         for file_path in file_paths:
             self.append_new_file_to_list(file_path)
         self.layout.addWidget(self.file_list)
@@ -564,11 +597,11 @@ class FileDialog(QDialog):
     def sign_file(self, index):
         try:
             filepath_to_stamp = ''
-            new_file_path = ""
             item = self.file_list.item(index)
             widget = self.file_list.itemWidget(item)
             file_path = widget.file_path
             file_path_clean = widget.get_clean_file_path()
+            soed_file_id = widget.file_id
             if file_path != file_path_clean:
                 shutil.move(file_path, file_path_clean)
                 file_path = file_path_clean
@@ -584,35 +617,46 @@ class FileDialog(QDialog):
             else:
                 pages = None
             print(f"Файл: {file_path}, Страницы: {pages}")
-            if file_path.endswith('.pdf') and pages:
+            if file_path.lower().endswith('.pdf') and pages:
                 if not self.sign_original.isChecked():
                     filepath_to_stamp = os.path.join(os.path.dirname(file_path),
                                                      f'gf_{os.path.basename(file_path)}')
                     shutil.copy(file_path, filepath_to_stamp)
-                    if pages:
-                        _ = add_stamp(filepath_to_stamp, self.certificate_comboBox.currentText(),
-                                      self.certs_data[self.certificate_comboBox.currentText()], pages)
+                    _ = add_stamp(filepath_to_stamp, self.certificate_comboBox.currentText(),
+                                  self.certs_data[self.certificate_comboBox.currentText()], pages)
                 else:
                     add_stamp(file_path, self.certificate_comboBox.currentText(),
                               self.certs_data[self.certificate_comboBox.currentText()], pages)
+            sign_path = sign_document(file_path, self.certs_data[self.certificate_comboBox.currentText()])
+            if soed_file_id:
+                if os.path.isfile(sign_path):
+                    fd, zip_to_send = tempfile.mkstemp(f'.zip')
+                    os.close(fd)
+                    with zipfile.ZipFile(zip_to_send, 'w') as zipf:
+                        zipf.write(file_path, os.path.basename(file_path))
+                        zipf.write(sign_path, os.path.basename(sign_path))
+                        if filepath_to_stamp:
+                            zipf.write(filepath_to_stamp, os.path.basename(filepath_to_stamp))
+                        else:
+                            zipf.write(file_path, f'gf_{os.path.basename(file_path)}')
+                    result = self.send_zip_to_soed(zip_to_send, soed_file_id)
+                    for fp in [zip_to_send, file_path, sign_path, filepath_to_stamp]:
+                        try:
+                            os.remove(fp)
+                        except:
+                            pass
+                    if not result:
+                        return 0, '', file_path
+                    else:
+                        return 1, result, file_path
+                else:
+                    return 1, e, file_path
 
-            sign = sign_document(file_path, self.certs_data[self.certificate_comboBox.currentText()])
-            if sign:
+            if sign_path:
                 # Блок проверки пользовательских правил перемещения
                 for rule in self.rules:
                     source_dir, patterns, dest_dir, _ = rule.strip().split('|')
                     if file_path.startswith(source_dir):
-                        if not patterns:
-                            # Перемещаем файл в целевую директорию
-                            new_file_path = os.path.join(dest_dir, os.path.basename(file_path))
-                            shutil.move(file_path, new_file_path)
-                            shutil.move(sign, new_file_path + '.sig')
-                            widget.file_path = new_file_path
-                            if filepath_to_stamp:
-                                new_file_path_to_stamp = os.path.join(dest_dir, os.path.basename(filepath_to_stamp))
-                                shutil.move(filepath_to_stamp, new_file_path_to_stamp)
-                                widget.file_path = filepath_to_stamp
-                            break
                         patterns_list = patterns.split(';')
                         # Проверяем, соответствует ли файл всем паттернам
                         all_patterns_match = True
@@ -621,15 +665,14 @@ class FileDialog(QDialog):
                                 all_patterns_match = False
                                 break
                         if all_patterns_match:
-                            # Перемещаем файл в целевую директорию
-                            new_file_path = os.path.join(dest_dir, os.path.basename(file_path))
-                            shutil.move(file_path, new_file_path)
-                            shutil.move(sign, new_file_path + '.sig')
-                            widget.file_path = new_file_path
-                            if filepath_to_stamp:
-                                new_file_path_to_stamp = os.path.join(dest_dir, os.path.basename(filepath_to_stamp))
-                                shutil.move(filepath_to_stamp, new_file_path_to_stamp)
-                                widget.file_path = new_file_path_to_stamp
+                            if os.path.dirname(file_path) != os.path.abspath(dest_dir):
+                                # Перемещаем файл в целевую директорию
+                                new_file_path = os.path.join(dest_dir, os.path.basename(file_path))
+                                shutil.move(file_path, dest_dir)
+                                shutil.move(sign_path, dest_dir)
+                                widget.file_path = new_file_path
+                                if filepath_to_stamp:
+                                    shutil.move(filepath_to_stamp, dest_dir)
             else:
                 print(f'Не удалось подписать {file_path}')
                 return 1, '', file_path
@@ -650,6 +693,45 @@ class FileDialog(QDialog):
             if self.width() < widget.sizeHint().width() + 35:
                 self.setFixedWidth(widget.sizeHint().width() + 35)
             self.file_list.setItemWidget(item, widget)
+            print(file_path, "добавлен в список")
+
+    def append_new_online_file_to_list(self, file_id, file_attr):
+        fn = file_attr['fileName']
+        file_path = file_attr['filePath']
+        sig_pages = file_attr['sigPages']
+        item = QListWidgetItem(self.file_list)
+        widget = CustomListWidgetItem(file_path, file_id=file_id, name=fn, sig_pages=sig_pages)
+        item.setSizeHint(widget.sizeHint())
+        if self.width() < widget.sizeHint().width() + 35:
+            self.setFixedWidth(widget.sizeHint().width() + 35)
+        self.file_list.setItemWidget(item, widget)
+        print(file_path, "добавлен в список")
+
+    def send_zip_to_soed(self, zip_to_send, soed_file_id):
+        ip_server = config.get('soed_url')
+        port_server = config.get('soed_port')
+        api_key = config.get('api_key')
+        # Проверка наличия URL и порта
+        if not ip_server or not port_server:
+            raise ValueError("URL или порт не указаны в конфигурации")
+        url = f"https://{ip_server}:{port_server}/ext/upload-signed-file"
+        headers = {'X-API-KEY': api_key}
+        # Параметры запроса
+        params = {'fileId': soed_file_id}
+        # Открываем файл ZIP для отправки
+        with open(zip_to_send, 'rb') as file:
+            files = {'file': file}
+            # Отправка POST-запроса
+            response = requests.post(url, headers=headers, data=params, files=files, verify=False, proxies={'http': False, 'https': False})
+        # Проверка ответа
+        if response.status_code == 200:
+            result = response.json()
+            if not result.get('error'):
+                return 0
+            else:
+                return f"Ошибка при отправке: {result.get('error_message')}"
+        else:
+            return f"Ошибка подключения: статус {response.status_code}"
 
     def closeEvent(self, event):
         self.file_list.clear()
