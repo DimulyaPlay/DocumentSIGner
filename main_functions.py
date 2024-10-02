@@ -176,6 +176,7 @@ def check_chosen_pages(chosen_pages_string):
                     if j not in outList:
                         outList.append(j)
         outList = sorted(outList)
+        outList = [str(i) for i in outList]
         return outList
     else:
         return []
@@ -409,6 +410,7 @@ class CustomListWidgetItem(QWidget):
             print(pagelist)
             if pagelist:
                 self.custom_pages.setText(', '.join(pagelist))
+                self.radio_custom.setChecked(True)  # Явно включаем радиокнопку
         elif self.sig_pages is not None:
             self.radio_none.setChecked(True)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
