@@ -117,7 +117,7 @@ def get_cert_data():
                         cert[cleaned_row[0]] = cleaned_row[1]
                         if 'CN=' in cleaned_row[1]:
                             cert_name = re.search(r'CN=([^\n]+)', cleaned_row[1]).group(1)
-                certs_data[cert_name] = cert
+                            certs_data[cert_name] = cert
         except subprocess.CalledProcessError as e:
             print(f"Ошибка выполнения команды: {e}")
         return certs_data
@@ -458,7 +458,7 @@ class CustomListWidgetItem(QWidget):
 
 
 class FileDialog(QDialog):
-    def __init__(self, file_paths):
+    def __init__(self, file_paths, downloaded_server_files=dict()):
         super().__init__()
         self.certs_data = get_cert_data()
         self.setWindowIcon(QIcon(resource_path('icons8-legal-document-64.ico')))
@@ -469,6 +469,7 @@ class FileDialog(QDialog):
         self.layout.setSpacing(4)
         self.resize(600, 500)
         self.setMaximumWidth(1900)
+        self.downloaded_server_files = downloaded_server_files
         self.rules_file = os.path.join(config_folder, 'rules.txt')
         # Загрузка и проверка файла по правилам из rules.txt
         if os.path.exists(self.rules_file):
@@ -648,11 +649,13 @@ class FileDialog(QDialog):
                         except:
                             pass
                     if not result:
+                        # успех
+                        del self.downloaded_server_files[soed_file_id]
                         return 0, '', file_path
                     else:
                         return 1, result, file_path
                 else:
-                    return 1, e, file_path
+                    return 1, 'Не удалось найти sig фал при проверке', file_path
 
             if sign_path:
                 # Блок проверки пользовательских правил перемещения
@@ -679,7 +682,7 @@ class FileDialog(QDialog):
                 print(f'Не удалось подписать {file_path}')
                 return 1, '', file_path
         except Exception as e:
-            print(f'Не удалось подписать {file_path}: {e}')
+            print(f'Не удалось подписать: {e}')
             traceback.print_exc()
             return 1, e, file_path
         config['last_cert'] = self.certificate_comboBox.currentText()

@@ -1,19 +1,14 @@
-import shutil
 import sys
-import traceback
 import requests
 from PySide2 import QtWidgets, QtGui, QtCore
 from PySide2.QtCore import QTranslator, QLocale, QLibraryInfo, Signal, Slot
 from widget_ui import Ui_MainWindow
-from threading import Thread
+from threading import Thread, Lock
 from glob import glob
-import time
-import logging
 import socket
 from main_functions import resource_path, check_api_key, config_folder, FileWatcher, add_to_context_menu, remove_from_context_menu, RulesDialog, config, save_config, send_file_path_to_existing_instance, file_paths_queue, QueueMonitorThread, FileDialog, handle_dropped_files
 import msvcrt
 import os
-import fnmatch
 import winshell
 
 # C:\Users\CourtUser\Desktop\release\DocumentSIGner\venv\Scripts\pyinstaller.exe --windowed --noconfirm --icon "C:\Users\CourtUser\Desktop\release\DocumentSIGner\icons8-legal-document-64.ico" --add-data "C:\Users\CourtUser\Desktop\release\DocumentSIGner\icons8-legal-document-64.ico;." --add-data "C:\Users\CourtUser\Desktop\release\DocumentSIGner\Update.exe;." --add-data "C:\Users\CourtUser\Desktop\release\DocumentSIGner\Update.cfg;." --add-data "C:\Users\CourtUser\Desktop\release\DocumentSIGner\dcs.png;."  C:\Users\CourtUser\Desktop\release\DocumentSIGner\documentSIGner.py
@@ -32,20 +27,24 @@ def exception_hook(exc_type, exc_value, exc_traceback):
 
 class SystemTrayGui(QtWidgets.QSystemTrayIcon):
     confirm_signing_signal = Signal(str, object)
+    new_soed_file_signal = Signal(str)  # Сигнал для уведомления о новом файле
 
     global qt_app
     def __init__(self, icon, parent=None):
         QtWidgets.QSystemTrayIcon.__init__(self, icon, parent)
+        self.no_soed_connection = None
         self.activated.connect(self.show_menu)
         self.soed = None
         self.notifiers = []
+        self.download_lock = Lock()
+        self.new_soed_file_signal.connect(self.notify_new_file)  # Подключение сигнала к функции уведомления
         self.downloaded_server_files = {}
         self.current_session_soed_files = os.path.join(os.path.dirname(sys.argv[0]), 'downloaded_soed_files')
         shutil.rmtree(self.current_session_soed_files, ignore_errors=True)
         os.makedirs(self.current_session_soed_files, exist_ok=True)
         self.messageClicked.connect(self.show_menu)
         self.confirm_signing_signal.connect(self.confirm_signing)
-        self.dialog = FileDialog([])
+        self.dialog = FileDialog([], self.downloaded_server_files)
         confirmations_path = os.path.join(os.path.dirname(sys.argv[0]), 'confirmations')
         if os.path.exists(confirmations_path):
             files = glob(f'{confirmations_path}/*')
@@ -58,6 +57,10 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.toggle_soed_server = menu.addAction("СО ЭД сервер")
         self.toggle_soed_server.setCheckable(True)
         self.toggle_soed_server.triggered.connect(self.toggle_soed)
+        self.toggle_soed_api_cabinet = menu.addAction("Подключение к СО ЭД по API")
+        self.toggle_soed_api_cabinet.setCheckable(True)
+        self.toggle_soed_api_cabinet.setChecked(bool(config.get('api_key')))
+        self.toggle_soed_api_cabinet.triggered.connect(self.toggle_soed_api)
         self.toggle_widget_visible = menu.addAction("Отображать виджет")
         self.toggle_widget_visible.setCheckable(True)
         self.toggle_widget_visible.triggered.connect(self.toggle_widget)
@@ -136,13 +139,14 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         if config['notify']:
             self.create_notifiers()
         # Инициализация таймера
-        ip_server = config.get('soed_url', None)
-        port_server = config.get('soed_port', None)
+        ip_server = config.get('soed_url')
+        port_server = config.get('soed_port')
         # Проверка наличия URL и порта
         if ip_server and port_server:
+            self.start_file_fetch_thread()
             print('soed checking active')
             self.timer = QtCore.QTimer(self)
-            self.timer.timeout.connect(self.fetch_files_from_server)
+            self.timer.timeout.connect(self.start_file_fetch_thread)
             # Запуск таймера (интервал 1.65 минут = 100000 миллисекунд)
             self.timer.start(100000)
 
@@ -168,11 +172,11 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.radio_all.setChecked(page == 3)
 
     def show_menu(self, reason=QtWidgets.QSystemTrayIcon.Trigger):
-        ip_server = config.get('soed_url', None)
-        port_server = config.get('soed_port', None)
+        ip_server = config.get('soed_url')
+        port_server = config.get('soed_port')
         # Проверка наличия URL и порта
-        if ip_server and port_server:
-            self.fetch_files_from_server()
+        if ip_server and port_server and not self.no_soed_connection:
+            self.start_file_fetch_thread()
         try:
             if self.dialog.isVisible():
                 self.dialog.activateWindow()
@@ -266,27 +270,40 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         save_config()
 
     def toggle_soed(self):
-        text, ok = QtWidgets.QInputDialog.getText(None, 'Подключение по api.', 'Введите api ключ:')
-        if ok and text:
-            ok, url, port = check_api_key(text)
-            if ok:
-                config['soed_url'] = url
-                config['soed_port'] = port
-                config['api_key'] = text
-                QtWidgets.QMessageBox.information(None, "Успех", 'Ключ сохранен')
-            else:
-                QtWidgets.QMessageBox.warning(None, "Успех", 'Ключ не прошел проверку')
         if self.toggle_soed_server.isChecked():
             self.soed = Thread(target=run_flask, daemon=True)
             self.soed.start()
             config['soed'] = True
             self.setToolTip(f'DocumentSIGner на порту {config["port"]}')
         else:
-
+            config['soed_url'] = False
+            config['soed_port'] = False
+            config['api_key'] = False
             self.soed = None
             config['soed'] = False
             self.setToolTip(f'DocumentSIGner отключен от сети.')
         save_config()
+
+    def toggle_soed_api(self):
+        if self.toggle_soed_api_cabinet.isChecked():
+            text, ok = QtWidgets.QInputDialog.getText(None, 'Подключение по api.', 'Введите api ключ:')
+            if ok and text:
+                ok, url, port = check_api_key(text)
+                if ok:
+                    config['soed_url'] = url
+                    config['soed_port'] = port
+                    config['api_key'] = text
+                    QtWidgets.QMessageBox.information(None, "Успех", 'Ключ сохранен')
+
+                else:
+                    QtWidgets.QMessageBox.warning(None, "Успех", 'Ключ не прошел проверку')
+        else:
+            config['soed_url'] = False
+            config['soed_port'] = False
+            config['api_key'] = False
+        save_config()
+        self.toggle_soed_api_cabinet.setChecked(bool(config.get('api_key')))
+
 
     def fetch_files_from_server(self):
         """
@@ -294,44 +311,45 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         """
         ip_server = config.get('soed_url', None)
         port_server = config.get('soed_port', None)
-        # Проверка наличия URL и порта
-        if ip_server and port_server:
+        if ip_server and port_server and not self.no_soed_connection:
             url = f"https://{ip_server}:{port_server}/ext/judge-files"
             headers = {'X-API-KEY': config['api_key']}
             try:
-                # Отправка GET-запроса на получение списка файлов
-                response = requests.get(url, headers=headers, verify=False, proxies={'http': False, 'https': False})
+                response = requests.get(url, headers=headers, verify=False, proxies={'http': False, 'https': False}, timeout=3)
                 if response.status_code == 200:
-                    # Обновляем список файлов с сервера
                     new_server_files = response.json().get('files', [])
-                    # Перебираем файлы с сервера и проверяем наличие на клиенте
                     for file_info in new_server_files:
                         file_name = file_info['fileName']
                         file_id = file_info['id']
                         sig_pages = file_info['sigPages']
-                        # Проверка, скачан ли уже файл (можно хранить в `self.downloaded_files`)
-                        if file_id not in self.downloaded_server_files:
-                            # Если файл не загружен, загружаем его
-                            file_path = self.download_file(file_id, file_name)
-                            if file_path:  # Уведомляем о новом загруженном файле
-                                self.downloaded_server_files[file_id] = {'fileName': file_name,
-                                                                         'sigPages': sig_pages,
-                                                                         'filePath': file_path}
-                                self.notify_new_file(file_path)
-                            print(f"Список файлов обновлен: {self.downloaded_server_files}")
-                    # Список идентификаторов файлов, которые пришли с сервера
+                        with self.download_lock:  # Защищаем доступ к self.downloaded_server_files
+                            if file_id not in self.downloaded_server_files:
+                                file_path = self.download_file(file_id, file_name)
+                                if file_path:
+                                    self.downloaded_server_files[file_id] = {
+                                        'fileName': file_name,
+                                        'sigPages': sig_pages,
+                                        'filePath': file_path
+                                    }
+                                    self.new_soed_file_signal.emit(file_path)  # Посылаем сигнал о новом файле
                     current_server_file_ids = {file_info['id'] for file_info in new_server_files}
-
-                    # Удаление файлов, которые есть в `self.downloaded_server_files`, но отсутствуют на сервере
-                    files_to_remove = [file_id for file_id in self.downloaded_server_files if
-                                       file_id not in current_server_file_ids]
-                    for file_id in files_to_remove:
-                        del self.downloaded_server_files[file_id]
-                        print(f"Файл {file_id} удален из списка загруженных, так как отсутствует на сервере.")
+                    with self.download_lock:
+                        files_to_remove = [file_id for file_id in self.downloaded_server_files if file_id not in current_server_file_ids]
+                        for file_id in files_to_remove:
+                            del self.downloaded_server_files[file_id]
                 else:
                     print(f"Ошибка получения данных: {response.status_code}, {response.text}")
+                    self.no_soed_connection = True
             except requests.RequestException as e:
                 print(f"Ошибка подключения: {e}")
+                self.no_soed_connection = True
+
+    def start_file_fetch_thread(self):
+        if not self.no_soed_connection:
+            thread = Thread(target=self.fetch_files_from_server, daemon=True)
+            thread.start()
+        else:
+            print("Сервер недоступен. Проверка файлов не выполняется.")
 
     def download_file(self, file_id, file_name):
         """
