@@ -11,7 +11,7 @@ import msvcrt
 import os
 import winshell
 
-# C:\Users\CourtUser\Desktop\release\DocumentSIGner\venv\Scripts\pyinstaller.exe --windowed --noconfirm --icon "C:\Users\CourtUser\Desktop\release\DocumentSIGner\icons8-legal-document-64.ico" --add-data "C:\Users\CourtUser\Desktop\release\DocumentSIGner\icons8-legal-document-64.ico;." --add-data "C:\Users\CourtUser\Desktop\release\DocumentSIGner\Update.exe;." --add-data "C:\Users\CourtUser\Desktop\release\DocumentSIGner\Update.cfg;." --add-data "C:\Users\CourtUser\Desktop\release\DocumentSIGner\dcs.png;."  C:\Users\CourtUser\Desktop\release\DocumentSIGner\documentSIGner.py
+# venv\Scripts\pyinstaller.exe --windowed --noconfirm --icon "C:\Users\CourtUser\Documents\PyCharmProjects\DocumentSIGner\icons8-legal-document-64.ico" --add-data "C:\Users\CourtUser\Documents\PyCharmProjects\DocumentSIGner\icons8-legal-document-64.ico;." --add-data "C:\Users\CourtUser\Documents\PyCharmProjects\DocumentSIGner\Update.exe;." --add-data "C:\Users\CourtUser\Documents\PyCharmProjects\DocumentSIGner\Update.cfg;." --add-data "C:\Users\CourtUser\Documents\PyCharmProjects\DocumentSIGner\dcs.png;."  C:\Users\CourtUser\Documents\PyCharmProjects\DocumentSIGner\documentSIGner.py
 
 
 def exception_hook(exc_type, exc_value, exc_traceback):

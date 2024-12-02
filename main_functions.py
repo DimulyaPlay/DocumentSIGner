@@ -96,8 +96,22 @@ def save_config():
 
 config = read_create_config(config_file)
 
+def get_console_encoding():
+    result = subprocess.run(['chcp'], capture_output=True, text=True, shell=True)
+    match = re.search(r'(\d+)', result.stdout)
+    if match:
+        codepage = int(match.group(1))
+        if codepage == 866:
+            return 'cp866'
+        elif codepage == 1251:
+            return 'cp1251'
+        else:
+            return 'utf-8'
+    return 'cp866'
+
 
 def get_cert_data():
+    encoding =get_console_encoding()
     cert_mgr_path = os.path.join(config['csp_path'], 'certmgr.exe')
     if os.path.exists(cert_mgr_path):
         certs_data = {}
@@ -105,7 +119,7 @@ def get_cert_data():
             result = subprocess.run([cert_mgr_path, '-list'],
                                     capture_output=True,
                                     text=True, check=True,
-                                    encoding='cp866',
+                                    encoding=encoding,
                                     creationflags=subprocess.CREATE_NO_WINDOW)
             output = result.stdout
             for i in output.split('-------')[1:]:
