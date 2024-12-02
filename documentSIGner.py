@@ -541,5 +541,4 @@ if __name__ == '__main__':
             file_paths_queue.put(file_paths[0])
         from flask_app import *
         sys.excepthook = exception_hook
-        certs_data = get_cert_data()
         main()

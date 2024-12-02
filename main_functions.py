@@ -129,7 +129,7 @@ def get_cert_data():
                     cleaned_row = ' '.join(row.split()).split(" : ")
                     if len(cleaned_row) == 2:
                         cert[cleaned_row[0]] = cleaned_row[1]
-                        if 'CN=' in cleaned_row[1]:
+                        if 'CN=' in cleaned_row[1] and "Issuer" not in cleaned_row[0]:
                             cert_name = re.search(r'CN=([^\n]+)', cleaned_row[1]).group(1)
                             certs_data[cert_name] = cert
         except subprocess.CalledProcessError as e:
