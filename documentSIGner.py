@@ -13,7 +13,6 @@ import winshell
 
 # venv\Scripts\pyinstaller.exe --windowed --noconfirm --icon "C:\Users\CourtUser\Documents\PyCharmProjects\DocumentSIGner\icons8-legal-document-64.ico" --add-data "C:\Users\CourtUser\Documents\PyCharmProjects\DocumentSIGner\icons8-legal-document-64.ico;." --add-data "C:\Users\CourtUser\Documents\PyCharmProjects\DocumentSIGner\Update.exe;." --add-data "C:\Users\CourtUser\Documents\PyCharmProjects\DocumentSIGner\Update.cfg;." --add-data "C:\Users\CourtUser\Documents\PyCharmProjects\DocumentSIGner\dcs.png;."  C:\Users\CourtUser\Documents\PyCharmProjects\DocumentSIGner\documentSIGner.py
 
-
 def exception_hook(exc_type, exc_value, exc_traceback):
     """
     Функция для перехвата исключений и отображения диалогового окна с ошибкой.
@@ -109,6 +108,23 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.default_page_menu.addAction(self.radio_all)
         # Добавляем подменю в основное меню
         menu.addMenu(self.default_page_menu)
+
+        # Создаем подменю для "Размещение штампа на странице"
+        self.stamp_place_menu = QtWidgets.QMenu("Размещение штампа на странице", menu)
+        self.radio_page_buttom = QtWidgets.QAction("Внизу страницы", self.stamp_place_menu)
+        self.radio_page_buttom.setCheckable(True)
+        self.radio_page_buttom.setChecked(config.get('stamp_place', 0) == 0)
+        self.radio_page_buttom.triggered.connect(lambda: self.set_stamp_place(0))
+        self.radio_per_page = QtWidgets.QAction("Указать для каждой страницы", self.stamp_place_menu)
+        self.radio_per_page.setCheckable(True)
+        self.radio_per_page.setChecked(config.get('stamp_place', 0) == 1)
+        self.radio_per_page.triggered.connect(lambda: self.set_stamp_place(1))
+        # Добавляем переключатели в подменю
+        self.stamp_place_menu.addAction(self.radio_page_buttom)
+        self.stamp_place_menu.addAction(self.radio_per_page)
+        # Добавляем подменю в основное меню
+        menu.addMenu(self.stamp_place_menu)
+
         exit_action = menu.addAction("Выход")
         exit_action.triggered.connect(self.exit)
         self.setContextMenu(menu)
@@ -170,6 +186,13 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.radio_first.setChecked(page == 1)
         self.radio_last.setChecked(page == 2)
         self.radio_all.setChecked(page == 3)
+
+    def set_stamp_place(self, page):
+        config['stamp_place'] = page
+        save_config()
+        # Обновляем состояние радиокнопок
+        self.radio_page_buttom.setChecked(page == 0)
+        self.radio_per_page.setChecked(page == 1)
 
     def show_menu(self, reason=QtWidgets.QSystemTrayIcon.Trigger):
         ip_server = config.get('soed_url')

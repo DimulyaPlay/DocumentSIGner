@@ -14,9 +14,14 @@ import tempfile
 import fitz
 import base64
 import winreg as reg
-from PySide2.QtWidgets import QApplication, QAbstractItemView, QAction, QDialog, QMenu, QVBoxLayout, QListWidget, QTableWidget, QTableWidgetItem, QListWidgetItem, QHBoxLayout, QLabel, QRadioButton, QLineEdit, QPushButton, QFileDialog, QWidget, QComboBox, QCheckBox, QMessageBox
-from PySide2.QtCore import Qt, QThread, Signal
-from PySide2.QtGui import QIcon, QMovie
+from PySide2.QtWidgets import (QApplication, QAbstractItemView, QAction, QDialog,
+                               QMenu, QVBoxLayout, QListWidget, QTableWidget,
+                               QTableWidgetItem, QListWidgetItem, QHBoxLayout,
+                               QLabel, QRadioButton, QLineEdit, QPushButton,
+                               QFileDialog, QWidget, QComboBox, QCheckBox, QMessageBox,
+                               QSlider)
+from PySide2.QtCore import Qt, QThread, Signal, QRect, QSize
+from PySide2.QtGui import QIcon, QMovie, QPixmap, QPainter
 from queue import Queue
 import fnmatch
 import time
@@ -64,6 +69,7 @@ def read_create_config(config_path):
         "context_menu": False,
         'autorun': False,
         'default_page': 2,
+        'stamp_place': 0,
         'notify': False
     }
 
@@ -129,7 +135,7 @@ def get_cert_data():
                     cleaned_row = ' '.join(row.split()).split(" : ")
                     if len(cleaned_row) == 2:
                         cert[cleaned_row[0]] = cleaned_row[1]
-                        if 'CN=' in cleaned_row[1] and "Issuer" not in cleaned_row[0]:
+                        if 'CN=' in cleaned_row[1] and 'CN=Казначейство России' not in cleaned_row[1]:
                             cert_name = re.search(r'CN=([^\n]+)', cleaned_row[1]).group(1)
                             certs_data[cert_name] = cert
         except subprocess.CalledProcessError as e:
@@ -195,22 +201,42 @@ def check_chosen_pages(chosen_pages_string):
     else:
         return []
 
+def get_stamp_coords_for_filepath(file_path, pages, stamp_image):
+    from stamp_editor import PlaceImageStampOnA4
+    results = {}
 
-def add_stamp(doc_path, cert_name, cert_info, pagelist):
-    """
-    :param doc_path: путь к документу
-    :param cert_name: Имя пользователя сертификата
-    :param cert_info: Данные сертификата
-    :param pagelist: список страниц для простановки штампа
-    :return:
-    """
+    # Открываем PDF файл
+    doc = fitz.open(file_path)
+    for page_num in pages:
+        page_num = int(page_num)
+        page_index = page_num - 1
+        if page_num == -1:
+            page_index = len(doc) - 1
+        page = doc[page_index-1]
+        page_size = page.rect
+        # Генерируем изображение страницы
+        pix = page.get_pixmap(dpi=150)  # Указываем DPI
+        page_image_path = f"temp_page_{page_index}.png"
+        pix.save(page_image_path)  # Сохраняем временный файл
+        # Создаем окно для редактирования штампа
+        dialog = PlaceImageStampOnA4(page_image_path,(page_size.width, page_size.height), stamp_image)
+        dialog.exec_()
+        coords_and_scale = dialog.get_stamp_coordinates_and_scale()
+        results[page_index] = coords_and_scale
+        # Удаляем временный файл
+        os.remove(page_image_path)
+    doc.close()
+    return {file_path: results}
+
+
+
+def create_stamp_image(cert_name, cert_info):
     template_png_path = os.path.join(os.path.dirname(sys.argv[0]), 'dcs.png')
     fingerprint = cert_info.get('Серийный номер', cert_info.get('Serial', ' '))
     create_date = cert_info.get('Выдан', cert_info.get('Not valid before', ' '))[:10].replace('/','.')
     exp_date = cert_info.get('Истекает', cert_info.get('Not valid after', ' '))[:10].replace('/','.')
     stamp_path = add_text_to_stamp(template_png_path, cert_name, fingerprint, create_date, exp_date)
-    stamped_doc = add_stamp_to_pages(doc_path, stamp_path, pagelist)
-    return stamped_doc
+    return stamp_path
 
 
 def add_text_to_stamp(template_path, cert_name, fingerprint, create_date, exp_date):
@@ -281,10 +307,10 @@ def delete_registry_key(key, key_path):
         print(f"Failed to delete registry key: {e}")
 
 
-def add_stamp_to_pages(pdf_path, modified_stamp_path, pagelist):
+def add_stamp(pdf_path, stamp_path, pagelist, custom_coords=None):
     try:
         doc = fitz.open(pdf_path)
-        img_stamp = fitz.Pixmap(modified_stamp_path)  # Загружаем изображение
+        img_stamp = fitz.Pixmap(stamp_path)  # Загружаем изображение
         metadata = doc.metadata
         # Проверка, был ли документ создан с помощью "Microsoft: Print To PDF"
         is_microsoft_pdf = 'Microsoft: Print To PDF' in (metadata.get('producer', '') + metadata.get('creator', ''))
@@ -318,6 +344,9 @@ def add_stamp_to_pages(pdf_path, modified_stamp_path, pagelist):
                 x1 = x0 + img_width
                 y1 = y0 + img_height
                 img_rect = fitz.Rect(x0, y0, x1, y1)
+                if custom_coords:
+                    custom_coord = custom_coords.get(page, None)
+                    img_rect = custom_coord if custom_coord else img_rect
                 doc[page_index].insert_image(img_rect, pixmap=img_stamp)
                 print('штамп создан', page_index, x0, y0, x1, y1)
         doc.saveIncr()
@@ -474,6 +503,7 @@ class CustomListWidgetItem(QWidget):
 class FileDialog(QDialog):
     def __init__(self, file_paths, downloaded_server_files=dict()):
         super().__init__()
+        self.current_session_stamps = None
         self.certs_data = get_cert_data()
         self.setWindowIcon(QIcon(resource_path('icons8-legal-document-64.ico')))
         self.certs_list = list(self.certs_data.keys())
@@ -559,17 +589,18 @@ class FileDialog(QDialog):
 
         self.setLayout(self.layout)
 
-    def sign_all(self):
-        self.block_buttons(True)
-        self.loading_label.setMovie(self.movie)
-        self.movie.start()
+    def request_stamp_positions_from_user(self, files_to_sign):
+        stamp_image = create_stamp_image(self.certificate_comboBox.currentText(), self.certs_data[self.certificate_comboBox.currentText()])
+        for idx in files_to_sign:
+            file_path, pages, _ = self.get_filepath_and_pages_for_sign(idx)
+            if file_path and pages:
+                file_path_coords = get_stamp_coords_for_filepath(file_path, pages, stamp_image)
+                self.current_session_stamps.update(file_path_coords)
 
-        self.thread = SignAllFilesThread(self)
-        self.thread.result.connect(self.on_sign_all_result)
-        self.thread.start()
 
-    def sign_chosen(self):
-        # Получаем список всех файлов, у которых чекбокс установлен
+    def get_file_indexes_for_sign(self, all=False):
+        if all:
+            return range(self.file_list.count())
         files_to_sign = []
         for index in range(self.file_list.count()):
             item = self.file_list.item(index)
@@ -577,7 +608,25 @@ class FileDialog(QDialog):
             if widget.chb.isChecked():  # Проверяем установлен ли чекбокс
                 files_to_sign.append(index)
                 widget.chb.setChecked(False)
+        return files_to_sign
 
+    def sign_all(self):
+        self.current_session_stamps = {}
+        self.block_buttons(True)
+        self.loading_label.setMovie(self.movie)
+        self.movie.start()
+        if config.get('stamp_place', 0) == 1:
+            files_to_sign = self.get_file_indexes_for_sign(all=True)
+            self.request_stamp_positions_from_user(files_to_sign)
+        self.thread = SignAllFilesThread(self)
+        self.thread.result.connect(self.on_sign_all_result)
+        self.thread.start()
+
+    def sign_chosen(self):
+        self.current_session_stamps = {}
+        files_to_sign = self.get_file_indexes_for_sign()
+        if config.get('stamp_place', 0) == 1:
+            self.request_stamp_positions_from_user(files_to_sign)
         if files_to_sign:
             self.block_buttons(True)
             self.loading_label.setMovie(self.movie)
@@ -611,39 +660,44 @@ class FileDialog(QDialog):
         self.sign_button_all.setEnabled(not block)
         self.sign_button_chosen.setEnabled(not block)
 
+    def get_filepath_and_pages_for_sign(self, index):
+        item = self.file_list.item(index)
+        widget = self.file_list.itemWidget(item)
+        file_path = widget.file_path
+        file_path_clean = widget.get_clean_file_path()
+        soed_file_id = widget.file_id
+        if file_path != file_path_clean:
+            shutil.move(file_path, file_path_clean)
+            file_path = file_path_clean
+        if widget.radio_first.isChecked():
+            pages = [1]
+        elif widget.radio_last.isChecked():
+            pages = [-1]
+        elif widget.radio_all.isChecked():
+            pages = "all"
+        elif widget.radio_custom.isChecked():
+            pages = widget.custom_pages.text()
+            pages = check_chosen_pages(pages)
+        else:
+            pages = None
+        return file_path, pages, soed_file_id
+
     def sign_file(self, index):
         try:
             filepath_to_stamp = ''
-            item = self.file_list.item(index)
-            widget = self.file_list.itemWidget(item)
-            file_path = widget.file_path
-            file_path_clean = widget.get_clean_file_path()
-            soed_file_id = widget.file_id
-            if file_path != file_path_clean:
-                shutil.move(file_path, file_path_clean)
-                file_path = file_path_clean
-            if widget.radio_first.isChecked():
-                pages = [1]
-            elif widget.radio_last.isChecked():
-                pages = [-1]
-            elif widget.radio_all.isChecked():
-                pages = "all"
-            elif widget.radio_custom.isChecked():
-                pages = widget.custom_pages.text()
-                pages = check_chosen_pages(pages)
-            else:
-                pages = None
+            file_path, pages, soed_file_id = self.get_filepath_and_pages_for_sign(index)
             print(f"Файл: {file_path}, Страницы: {pages}")
+            print(self.current_session_stamps)
+            custom_coords = self.current_session_stamps.get(file_path)
             if file_path.lower().endswith('.pdf') and pages:
+                stamp_image_path = create_stamp_image(self.certificate_comboBox.currentText(), self.certs_data[self.certificate_comboBox.currentText()])
                 if not self.sign_original.isChecked():
                     filepath_to_stamp = os.path.join(os.path.dirname(file_path),
                                                      f'gf_{os.path.basename(file_path)}')
                     shutil.copy(file_path, filepath_to_stamp)
-                    _ = add_stamp(filepath_to_stamp, self.certificate_comboBox.currentText(),
-                                  self.certs_data[self.certificate_comboBox.currentText()], pages)
+                    _ = add_stamp(filepath_to_stamp, stamp_image_path, pages, custom_coords)
                 else:
-                    add_stamp(file_path, self.certificate_comboBox.currentText(),
-                              self.certs_data[self.certificate_comboBox.currentText()], pages)
+                    add_stamp(file_path, stamp_image_path, pages, custom_coords)
             sign_path = sign_document(file_path, self.certs_data[self.certificate_comboBox.currentText()])
             if soed_file_id:
                 if os.path.isfile(sign_path):
@@ -953,7 +1007,8 @@ class FileWatchHandler(FileSystemEventHandler):
     def on_created(self, event):
         if not event.is_directory:
             fn = os.path.basename(event.src_path)
-            if event.src_path.lower().endswith(ALLOWED_EXTENTIONS) and not fn.startswith(('~', "gf_")):
+            time.sleep(2)
+            if event.src_path.lower().endswith(ALLOWED_EXTENTIONS) and not fn.startswith(('~', "gf_")) and not os.path.exists(event.src_path.lower()+'.sig'):
                 self.notify_callback(event.src_path)
 
 
