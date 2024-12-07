@@ -180,54 +180,44 @@ def sign_document(s_source_file, cert_data):
 def check_chosen_pages(chosen_pages_string):
     if not chosen_pages_string:
         return []
-    if chosen_pages_string == 'all':
+    if chosen_pages_string.strip().lower() == 'all':
         return 'all'
-    outList = []
     chosen_pages_string = chosen_pages_string.replace(' ', '')
-    if chosen_pages_string:
-        stringLst = chosen_pages_string.split(',')
-        for i in stringLst:
-            try:
-                if int(i) not in outList:
-                    outList.append(int(i))
-            except:
-                iRange = i.split('-')
-                for j in range(int(iRange[0]), int(iRange[1]) + 1):
-                    if j not in outList:
-                        outList.append(j)
-        outList = sorted(outList)
-        outList = [str(i) for i in outList]
-        return outList
-    else:
-        return []
+    pages = set()
+    try:
+        for part in chosen_pages_string.split(','):
+            if '-' in part:
+                start, end = map(int, part.split('-'))
+                if start > end:
+                    start, end = end, start  # Переставляем местами, если диапазон введен в обратном порядке
+                pages.update(range(start - 1, end))  # Индексация с нуля
+            else:
+                pages.add(int(part) - 1)  # Добавляем одиночные страницы, с учетом индексации с нуля
+    except ValueError:
+        raise ValueError("Invalid input format. Use numbers or ranges like '1-3, 5'.")
+    return sorted(pages)
+
 
 def get_stamp_coords_for_filepath(file_path, pages, stamp_image):
     from stamp_editor import PlaceImageStampOnA4
     results = {}
-
-    # Открываем PDF файл
     doc = fitz.open(file_path)
-    for page_num in pages:
-        page_num = int(page_num)
-        page_index = page_num - 1
-        if page_num == -1:
+    pages = range(len(doc)) if pages == 'all' else pages
+    for page_index in pages:
+        if page_index == -1:
             page_index = len(doc) - 1
-        page = doc[page_index-1]
+        page = doc[page_index]
         page_size = page.rect
-        # Генерируем изображение страницы
-        pix = page.get_pixmap(dpi=150)  # Указываем DPI
+        pix = page.get_pixmap(dpi=150)
         page_image_path = f"temp_page_{page_index}.png"
-        pix.save(page_image_path)  # Сохраняем временный файл
-        # Создаем окно для редактирования штампа
-        dialog = PlaceImageStampOnA4(page_image_path,(page_size.width, page_size.height), stamp_image)
+        pix.save(page_image_path)
+        dialog = PlaceImageStampOnA4(page_image_path, (page_size.width, page_size.height), stamp_image)
         dialog.exec_()
         coords_and_scale = dialog.get_stamp_coordinates_and_scale()
         results[page_index] = coords_and_scale
-        # Удаляем временный файл
         os.remove(page_image_path)
     doc.close()
     return {file_path: results}
-
 
 
 def create_stamp_image(cert_name, cert_info):
@@ -311,44 +301,25 @@ def add_stamp(pdf_path, stamp_path, pagelist, custom_coords=None):
     try:
         doc = fitz.open(pdf_path)
         img_stamp = fitz.Pixmap(stamp_path)  # Загружаем изображение
-        metadata = doc.metadata
-        # Проверка, был ли документ создан с помощью "Microsoft: Print To PDF"
-        is_microsoft_pdf = 'Microsoft: Print To PDF' in (metadata.get('producer', '') + metadata.get('creator', ''))
         print('Добавление штампа на страницы', pagelist)
         if pagelist == 'all':
-            for page in doc:
-                page.clean_contents()
-                img_width, img_height = img_stamp.width / 4.5, img_stamp.height / 4.5
-                page_width = page.rect.width
-                page_height = page.rect.height
-                x0 = (page_width / 2) - (img_width / 2)
-                y0 = page_height - img_height - 25
-                x1 = x0 + img_width
-                y1 = y0 + img_height
-                img_rect = fitz.Rect(x0, y0, x1, y1)
-                page.insert_image(img_rect, pixmap=img_stamp)
-                print('штамп создан', x0, y0, x1, y1)
-        else:
-            for page in pagelist:
-                page = int(page)
-                page_index = page-1
-                if page == -1:
-                    page_index = len(doc)-1
-                if is_microsoft_pdf:
-                    doc[page_index].clean_contents()
-                img_width, img_height = img_stamp.width / 4.5, img_stamp.height / 4.5
-                page_width = doc[page_index].rect.width
-                page_height = doc[page_index].rect.height
-                x0 = (page_width / 2) - (img_width / 2)
-                y0 = page_height-img_height-25
-                x1 = x0 + img_width
-                y1 = y0 + img_height
-                img_rect = fitz.Rect(x0, y0, x1, y1)
-                if custom_coords:
-                    custom_coord = custom_coords.get(page, None)
-                    img_rect = custom_coord if custom_coord else img_rect
-                doc[page_index].insert_image(img_rect, pixmap=img_stamp)
-                print('штамп создан', page_index, x0, y0, x1, y1)
+            pagelist = range(len(doc))
+        for page_index in pagelist:
+            if page_index == -1:
+                page_index = len(doc)-1
+            img_width, img_height = img_stamp.width / 4.5, img_stamp.height / 4.5
+            page_width = doc[page_index].rect.width
+            page_height = doc[page_index].rect.height
+            x0 = (page_width / 2) - (img_width / 2)
+            y0 = page_height-img_height-25
+            x1 = x0 + img_width
+            y1 = y0 + img_height
+            img_rect = fitz.Rect(x0, y0, x1, y1)
+            if custom_coords:
+                custom_coord = custom_coords.get(page_index, None)
+                img_rect = custom_coord if custom_coord else img_rect
+            doc[page_index].insert_image(img_rect, pixmap=img_stamp)
+            print('штамп создан', page_index, img_rect)
         doc.saveIncr()
     except:
         print('Не удалось добавить штамп на', pdf_path)
@@ -406,6 +377,11 @@ class CustomListWidgetItem(QWidget):
         super().__init__()
         layout = QHBoxLayout()
         self.file_path = file_path.lower()
+        self.gf_file_path = None
+        if self.file_path.endswith('.pdf'):
+            # Получаем директорию и имя файла
+            directory, filename = os.path.split(self.file_path)
+            self.gf_file_path = os.path.join(directory, f"gf_{filename}")
         self.file_id = file_id
         self.name = name
         self.sig_pages = sig_pages
@@ -450,7 +426,6 @@ class CustomListWidgetItem(QWidget):
         self.parse_file_name_for_pages()
         if self.sig_pages:
             pagelist = check_chosen_pages(self.sig_pages)
-            print(pagelist)
             if pagelist:
                 self.custom_pages.setText(', '.join(pagelist))
                 self.radio_custom.setChecked(True)  # Явно включаем радиокнопку
@@ -469,8 +444,10 @@ class CustomListWidgetItem(QWidget):
         menu.exec_(self.mapToGlobal(pos))
 
     def open_file(self, event):
-        # Открытие файла по двойному клику
-        os.startfile(self.file_path)
+        if self.gf_file_path and os.path.exists(self.gf_file_path):
+            os.startfile(self.gf_file_path)
+        else:
+            os.startfile(self.file_path)
 
     def parse_file_name_for_pages(self):
         # Регулярное выражение для извлечения страниц из имени файла
@@ -597,7 +574,6 @@ class FileDialog(QDialog):
                 file_path_coords = get_stamp_coords_for_filepath(file_path, pages, stamp_image)
                 self.current_session_stamps.update(file_path_coords)
 
-
     def get_file_indexes_for_sign(self, all=False):
         if all:
             return range(self.file_list.count())
@@ -670,7 +646,7 @@ class FileDialog(QDialog):
             shutil.move(file_path, file_path_clean)
             file_path = file_path_clean
         if widget.radio_first.isChecked():
-            pages = [1]
+            pages = [0]
         elif widget.radio_last.isChecked():
             pages = [-1]
         elif widget.radio_all.isChecked():
@@ -687,7 +663,6 @@ class FileDialog(QDialog):
             filepath_to_stamp = ''
             file_path, pages, soed_file_id = self.get_filepath_and_pages_for_sign(index)
             print(f"Файл: {file_path}, Страницы: {pages}")
-            print(self.current_session_stamps)
             custom_coords = self.current_session_stamps.get(file_path)
             if file_path.lower().endswith('.pdf') and pages:
                 stamp_image_path = create_stamp_image(self.certificate_comboBox.currentText(), self.certs_data[self.certificate_comboBox.currentText()])
@@ -717,7 +692,6 @@ class FileDialog(QDialog):
                         except:
                             pass
                     if not result:
-                        # успех
                         del self.downloaded_server_files[soed_file_id]
                         return 0, '', file_path
                     else:
