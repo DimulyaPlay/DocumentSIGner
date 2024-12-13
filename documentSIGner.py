@@ -125,6 +125,22 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         # Добавляем подменю в основное меню
         menu.addMenu(self.stamp_place_menu)
 
+        # Создаем подменю для "Тип штампа по умолчанию"
+        self.stamp_type_menu = QtWidgets.QMenu("Тип штампа по умолчанию", menu)
+        self.radio_regular_stamp = QtWidgets.QAction("Обычный", self.stamp_type_menu)
+        self.radio_regular_stamp.setCheckable(True)
+        self.radio_regular_stamp.setChecked(config.get('stamp_type', 0) == 0)
+        self.radio_regular_stamp.triggered.connect(lambda: self.set_stamp_type(0))
+        self.radio_copy_stamp = QtWidgets.QAction("Копия верна", self.stamp_type_menu)
+        self.radio_copy_stamp.setCheckable(True)
+        self.radio_copy_stamp.setChecked(config.get('stamp_type', 0) == 1)
+        self.radio_copy_stamp.triggered.connect(lambda: self.set_stamp_type(1))
+        # Добавляем переключатели в подменю
+        self.stamp_type_menu.addAction(self.radio_regular_stamp)
+        self.stamp_type_menu.addAction(self.radio_copy_stamp)
+        # Добавляем подменю в основное меню
+        menu.addMenu(self.stamp_type_menu)
+
         exit_action = menu.addAction("Выход")
         exit_action.triggered.connect(self.exit)
         self.setContextMenu(menu)
@@ -193,6 +209,13 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         # Обновляем состояние радиокнопок
         self.radio_page_buttom.setChecked(page == 0)
         self.radio_per_page.setChecked(page == 1)
+
+    def set_stamp_type(self, stamp_type):
+        config['stamp_type'] = stamp_type
+        save_config()
+        # Обновляем состояние радиокнопок
+        self.radio_regular_stamp.setChecked(stamp_type == 0)
+        self.radio_copy_stamp.setChecked(stamp_type == 1)
 
     def show_menu(self, reason=QtWidgets.QSystemTrayIcon.Trigger):
         ip_server = config.get('soed_url')

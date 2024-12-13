@@ -10,8 +10,7 @@ class PlaceImageStampOnA4(QDialog):
         self.initUI()
 
     def initUI(self):
-        self.setWindowTitle('Размещение штампа')
-
+        self.setWindowTitle('Переместите штамп на нужное место и закройте окно')
         # Размеры для A4
         portrait_size = QSize(595, 842)
         landscape_size = QSize(842, 595)

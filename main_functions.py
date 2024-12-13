@@ -4,6 +4,7 @@ import socket
 import shutil
 import traceback
 import msvcrt
+from errno import ECHILD
 from glob import glob
 import subprocess
 import re
@@ -19,8 +20,8 @@ from PySide2.QtWidgets import (QApplication, QAbstractItemView, QAction, QDialog
                                QTableWidgetItem, QListWidgetItem, QHBoxLayout,
                                QLabel, QRadioButton, QLineEdit, QPushButton,
                                QFileDialog, QWidget, QComboBox, QCheckBox, QMessageBox,
-                               QSlider)
-from PySide2.QtCore import Qt, QThread, Signal, QRect, QSize
+                               QSlider, QButtonGroup, QFrame)
+from PySide2.QtCore import Qt, QThread, Signal, QRect, QSize, QLineF
 from PySide2.QtGui import QIcon, QMovie, QPixmap, QPainter
 from queue import Queue
 import fnmatch
@@ -198,7 +199,7 @@ def check_chosen_pages(chosen_pages_string):
     return sorted(pages)
 
 
-def get_stamp_coords_for_filepath(file_path, pages, stamp_image):
+def get_stamp_coords_for_filepath(file_path, pages, stamp_image, stamp_type):
     from stamp_editor import PlaceImageStampOnA4
     results = {}
     doc = fitz.open(file_path)
@@ -220,31 +221,50 @@ def get_stamp_coords_for_filepath(file_path, pages, stamp_image):
     return {file_path: results}
 
 
-def create_stamp_image(cert_name, cert_info):
-    template_png_path = os.path.join(os.path.dirname(sys.argv[0]), 'dcs.png')
+def create_stamp_image(cert_name, cert_info, stamp='regular'):
     fingerprint = cert_info.get('Серийный номер', cert_info.get('Serial', ' '))
     create_date = cert_info.get('Выдан', cert_info.get('Not valid before', ' '))[:10].replace('/','.')
     exp_date = cert_info.get('Истекает', cert_info.get('Not valid after', ' '))[:10].replace('/','.')
-    stamp_path = add_text_to_stamp(template_png_path, cert_name, fingerprint, create_date, exp_date)
+    stamp_path = add_text_to_stamp(cert_name, fingerprint, create_date, exp_date, stamp)
     return stamp_path
 
 
-def add_text_to_stamp(template_path, cert_name, fingerprint, create_date, exp_date):
-    template_image = Image.open(template_path)
-    draw = ImageDraw.Draw(template_image)
-    font_path = 'times.ttf'
-    font = ImageFont.truetype(font_path, 24)
-    text_positions = {
+def add_text_to_stamp(cert_name, fingerprint, create_date, exp_date, stamp='regular'):
+    template_path_main = os.path.join(os.path.dirname(sys.argv[0]), 'dcs.png')
+    template_path_copy_in_law = os.path.join(os.path.dirname(sys.argv[0]), 'dcs-copy-in-law.png')
+    template_path_copy_no_in_law = os.path.join(os.path.dirname(sys.argv[0]), 'dcs-copy-no-in-law.png')
+    text_positions_main = {
         'cert_name': (20, 145),
         'fingerprint': (20, 185),
         'create_date': (20, 225),
     }
+    text_positions_copy = {
+        'cert_name': (670, 145),
+        'fingerprint': (670, 185),
+        'create_date': (670, 225),
+        'in_law_date': (60, 200)
+    }
+    if stamp=='copy':
+        template_path = template_path_copy_no_in_law
+        text_positions = text_positions_copy
+    elif stamp.startswith('copy-'):
+        template_path = template_path_copy_in_law
+        text_positions = text_positions_copy
+    else:
+        template_path = template_path_main
+        text_positions = text_positions_main
+    template_image = Image.open(template_path)
+    draw = ImageDraw.Draw(template_image)
+    font_path = 'times.ttf'
+    font = ImageFont.truetype(font_path, 24)
     draw.text(text_positions['cert_name'], "Владелец:", fill='blue', font=font)
     draw.text(text_positions['cert_name'], "                          " + cert_name, fill='blue', font=font)
     draw.text(text_positions['fingerprint'], "Сертификат:", fill='blue', font=font)
     draw.text(text_positions['fingerprint'], "                          " + fingerprint[2:], fill='blue', font=font)
     draw.text(text_positions['create_date'], "Действителен:", fill='blue', font=font)
     draw.text(text_positions['create_date'], "                          " + f"c {create_date} по {exp_date}", fill='blue', font=font)
+    if stamp.startswith('copy-'):
+        draw.text(text_positions['in_law_date'],f"Вступил в законную силу {stamp.split('-')[1]}", fill='blue', font=ImageFont.truetype(font_path, 34))
     modified_image_path = os.path.join(os.path.dirname(sys.argv[0]), 'modified_stamp.png')
     template_image.save(modified_image_path)
     return modified_image_path
@@ -320,7 +340,10 @@ def add_stamp(pdf_path, stamp_path, pagelist, custom_coords=None):
                 img_rect = custom_coord if custom_coord else img_rect
             doc[page_index].insert_image(img_rect, pixmap=img_stamp)
             print('штамп создан', page_index, img_rect)
-        doc.saveIncr()
+        temp_path = pdf_path + ".tmp"
+        doc.save(temp_path, deflate=True)
+        doc.close()
+        os.replace(temp_path, pdf_path)
     except:
         print('Не удалось добавить штамп на', pdf_path)
         traceback.print_exc()
@@ -375,7 +398,7 @@ def handle_dropped_files(file_paths, dialog=None):
 class CustomListWidgetItem(QWidget):
     def __init__(self, file_path, file_id=None, name=None, sig_pages=None):
         super().__init__()
-        layout = QHBoxLayout()
+        self.stamp_date = ''
         self.file_path = file_path.lower()
         self.gf_file_path = None
         if self.file_path.endswith('.pdf'):
@@ -386,16 +409,32 @@ class CustomListWidgetItem(QWidget):
         self.name = name
         self.sig_pages = sig_pages
         self.page_fragment = ""  # Переменная для хранения найденного фрагмента
+        # Главный горизонтальный layout
+        main_layout = QHBoxLayout()
+        # Левая часть: чекбокс и лейбл
+        left_layout = QHBoxLayout()
         self.chb = QCheckBox()
-        layout.addWidget(self.chb)
-        # Название файла
+        left_layout.addWidget(self.chb)
+
         self.file_label = QLabel(os.path.basename(file_path) if name is None else name)
         self.file_label.mouseDoubleClickEvent = self.open_file
-        self.file_label.setMinimumWidth(440)
+        self.file_label.setMinimumWidth(400)
         self.file_label.setToolTip(os.path.basename(file_path) if name is None else name)
-        layout.addWidget(self.file_label)
-        layout.addStretch()
+        self.file_label.setWordWrap(True)
+        left_layout.addWidget(self.file_label)
+        left_layout.addStretch()  # Добавляем растяжение для выравнивания
+        main_layout.addLayout(left_layout)
+        # Добавляем вертикальную линию
+        vertical_line = QFrame()
+        vertical_line.setFrameShape(QFrame.VLine)
+        vertical_line.setFrameShadow(QFrame.Sunken)
+        main_layout.addWidget(vertical_line)
         # Радиокнопки
+        # Правая часть: два горизонтальных блока
+        right_layout = QVBoxLayout()
+        # Верхний блок с радиокнопками и вводом страниц
+        top_radio_layout = QHBoxLayout()
+        top_radio_layout.addWidget(QLabel('Страницы штампа: '))
         self.radio_none = QRadioButton("Нет")
         self.radio_none.setChecked(config.get('default_page', 2) == 0)
         self.radio_none.setChecked(not self.file_path.endswith('.pdf'))
@@ -410,20 +449,18 @@ class CustomListWidgetItem(QWidget):
         self.radio_all.setChecked(config.get('default_page', 2) == 3)
         self.radio_custom = QRadioButton("Своё")
         self.radio_custom.setEnabled(self.file_path.endswith('.pdf'))
-        layout.addWidget(self.radio_none)
-        layout.addWidget(self.radio_first)
-        layout.addWidget(self.radio_last)
-        layout.addWidget(self.radio_all)
-        layout.addWidget(self.radio_custom)
+        top_radio_layout.addWidget(self.radio_none)
+        top_radio_layout.addWidget(self.radio_first)
+        top_radio_layout.addWidget(self.radio_last)
+        top_radio_layout.addWidget(self.radio_all)
+        top_radio_layout.addWidget(self.radio_custom)
         # Поле для ввода своих страниц
         self.custom_pages = QLineEdit()
         self.custom_pages.setPlaceholderText("Введите страницы")
         self.custom_pages.setEnabled(self.file_path.endswith('.pdf'))
         self.custom_pages.textEdited.connect(lambda: self.radio_custom.setChecked(True))
-        self.custom_pages.setFixedWidth(110)  # Фиксированная ширина
-        layout.addWidget(self.custom_pages)
-        self.setLayout(layout)
-        self.parse_file_name_for_pages()
+        self.custom_pages.setFixedWidth(115)  # Фиксированная ширина
+        top_radio_layout.addWidget(self.custom_pages)
         if self.sig_pages:
             pagelist = check_chosen_pages(self.sig_pages)
             if pagelist:
@@ -431,9 +468,39 @@ class CustomListWidgetItem(QWidget):
                 self.radio_custom.setChecked(True)  # Явно включаем радиокнопку
         elif self.sig_pages is not None:
             self.radio_none.setChecked(True)
+        right_layout.addLayout(top_radio_layout)
+        # Нижний блок с радиокнопками и вводом даты
+        bottom_radio_layout = QHBoxLayout()
+        bottom_radio_layout.addWidget(QLabel('Вид штампа:             '))
+        # Создаем отдельную группу для нижнего ряда радиокнопок
+        self.stamp_radio_group = QButtonGroup(self)
+        self.radio_standard = QRadioButton("Обычный")
+        self.radio_standard.setEnabled(self.file_path.endswith('.pdf'))
+        self.radio_standard.setChecked(config.get('default_stamp_type', 0) == 0)
+        self.radio_verified_not_in_law = QRadioButton("Коп. верна не вступил")
+        self.radio_verified_not_in_law.setEnabled(self.file_path.endswith('.pdf'))
+        self.radio_verified_not_in_law.setChecked(config.get('default_stamp_type', 0) == 1)
+        self.radio_verified_in_law = QRadioButton("Коп. верна вступил")
+        self.radio_verified_in_law.setEnabled(self.file_path.endswith('.pdf'))
+        self.radio_verified_in_law.setChecked(config.get('default_stamp_type', 0) == 2)
+        # Добавляем кнопки в группу
+        self.stamp_radio_group.addButton(self.radio_standard)
+        self.stamp_radio_group.addButton(self.radio_verified_not_in_law)
+        self.stamp_radio_group.addButton(self.radio_verified_in_law)
+        bottom_radio_layout.addWidget(self.radio_standard)
+        bottom_radio_layout.addWidget(self.radio_verified_not_in_law)
+        bottom_radio_layout.addWidget(self.radio_verified_in_law)
+        self.date_input = QLineEdit()
+        self.date_input.setPlaceholderText("Вступил(дд.мм.гггг)")
+        self.date_input.setFixedWidth(115)
+        self.parse_file_name_for_pages_and_stamps()
+        bottom_radio_layout.addWidget(self.date_input)
+        right_layout.addLayout(bottom_radio_layout)
+        # Добавляем правую часть в главный layout
+        main_layout.addLayout(right_layout)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
-        self.setLayout(layout)
+        self.setLayout(main_layout)
 
     def show_context_menu(self, pos):
         # Создаем контекстное меню
@@ -449,8 +516,8 @@ class CustomListWidgetItem(QWidget):
         else:
             os.startfile(self.file_path)
 
-    def parse_file_name_for_pages(self):
-        # Регулярное выражение для извлечения страниц из имени файла
+    def parse_file_name_for_pages_and_stamps(self):
+        # Извлечение страниц из имени файла
         pattern = r'\{(.*?)\}'
         match = re.search(pattern, os.path.basename(self.file_path))
         if match:
@@ -458,6 +525,18 @@ class CustomListWidgetItem(QWidget):
             pages = match.group(1)
             self.custom_pages.setText(pages)
             self.radio_custom.setChecked(True)
+
+        # Извлечение вида штампа и даты
+        if "копия" in os.path.basename(self.file_path):
+            print(os.path.basename(self.file_path))
+            if match := re.search(r'копия-(\d{2}\.\d{2}\.\d{4})', os.path.basename(self.file_path)):
+                self.stamp_date = match.group(1).split('-', 1)[-1]
+                self.radio_verified_in_law.setChecked(True)
+                self.date_input.setText(self.stamp_date)
+                print('in law')
+            else:
+                self.radio_verified_not_in_law.setChecked(True)
+                print('nnot in law')
 
     def get_clean_file_path(self):
         if self.page_fragment:
@@ -567,11 +646,12 @@ class FileDialog(QDialog):
         self.setLayout(self.layout)
 
     def request_stamp_positions_from_user(self, files_to_sign):
-        stamp_image = create_stamp_image(self.certificate_comboBox.currentText(), self.certs_data[self.certificate_comboBox.currentText()])
         for idx in files_to_sign:
-            file_path, pages, _ = self.get_filepath_and_pages_for_sign(idx)
+            file_path, pages, _, stamp = self.get_filepath_and_pages_for_sign(idx)
+            stamp_image = create_stamp_image(self.certificate_comboBox.currentText(),
+                                             self.certs_data[self.certificate_comboBox.currentText()], stamp)
             if file_path and pages:
-                file_path_coords = get_stamp_coords_for_filepath(file_path, pages, stamp_image)
+                file_path_coords = get_stamp_coords_for_filepath(file_path, pages, stamp_image, stamp)
                 self.current_session_stamps.update(file_path_coords)
 
     def get_file_indexes_for_sign(self, all=False):
@@ -614,29 +694,32 @@ class FileDialog(QDialog):
             QMessageBox.information(self, 'Ничего не выбрано', 'Выберите документы для подписи.')
 
     def on_sign_all_result(self, fuckuped_files, index_list_red, index_list_green):
-        self.movie.stop()
-        self.loading_label.clear()
-        self.block_buttons(False)
-        for idx in index_list_green:
-            item = self.file_list.item(idx)
-            widget = self.file_list.itemWidget(item)
-            widget.set_file_label_background("rgba(0, 128, 0, 128)")
-        if fuckuped_files:
-            for idx in index_list_red:
+        try:
+            self.movie.stop()
+            self.loading_label.clear()
+            self.block_buttons(False)
+            for idx in index_list_green:
                 item = self.file_list.item(idx)
                 widget = self.file_list.itemWidget(item)
-                widget.set_file_label_background("rgba(255, 0, 0, 128)")
-            msg_lst = [f'{os.path.basename(fp)}-{err}' for fp, err in fuckuped_files.items()]
-            msg_str = '\n'.join(msg_lst)
-            QMessageBox.warning(self, 'Ошибка', f'Возникли ошибки со следующими документами:\n{msg_str}')
-        else:
-            QMessageBox.information(self, 'Успех', 'Создание подписи завершено.')
+                widget.set_file_label_background("rgba(0, 128, 0, 128)")
+            if fuckuped_files:
+                for idx in index_list_red:
+                    item = self.file_list.item(idx)
+                    widget = self.file_list.itemWidget(item)
+                    widget.set_file_label_background("rgba(255, 0, 0, 128)")
+                msg_lst = [f'{os.path.basename(fp)}-{err}' for fp, err in fuckuped_files.items()]
+                msg_str = '\n'.join(msg_lst)
+                QMessageBox.warning(self, 'Ошибка', f'Возникли ошибки со следующими документами:\n{msg_str}')
+            else:
+                QMessageBox.information(self, 'Успех', 'Создание подписи завершено.')
+        except:
+            traceback.print_exc()
 
     def block_buttons(self, block):
         self.sign_button_all.setEnabled(not block)
         self.sign_button_chosen.setEnabled(not block)
 
-    def get_filepath_and_pages_for_sign(self, index):
+    def get_filepath_and_pages_for_sign(self, index): ## добавить получение типа штампа
         item = self.file_list.item(index)
         widget = self.file_list.itemWidget(item)
         file_path = widget.file_path
@@ -656,16 +739,22 @@ class FileDialog(QDialog):
             pages = check_chosen_pages(pages)
         else:
             pages = None
-        return file_path, pages, soed_file_id
+        if widget.radio_verified_in_law.isChecked():
+            stamp = f'copy-{widget.date_input.text()}'
+        elif widget.radio_verified_not_in_law.isChecked():
+            stamp = 'copy'
+        else:
+            stamp = 'regular'
+        return file_path, pages, soed_file_id, stamp
 
     def sign_file(self, index):
         try:
             filepath_to_stamp = ''
-            file_path, pages, soed_file_id = self.get_filepath_and_pages_for_sign(index)
+            file_path, pages, soed_file_id, stamp = self.get_filepath_and_pages_for_sign(index)
             print(f"Файл: {file_path}, Страницы: {pages}")
             custom_coords = self.current_session_stamps.get(file_path)
             if file_path.lower().endswith('.pdf') and pages:
-                stamp_image_path = create_stamp_image(self.certificate_comboBox.currentText(), self.certs_data[self.certificate_comboBox.currentText()])
+                stamp_image_path = create_stamp_image(self.certificate_comboBox.currentText(), self.certs_data[self.certificate_comboBox.currentText()], stamp)
                 if not self.sign_original.isChecked():
                     filepath_to_stamp = os.path.join(os.path.dirname(file_path),
                                                      f'gf_{os.path.basename(file_path)}')
@@ -982,7 +1071,7 @@ class FileWatchHandler(FileSystemEventHandler):
         if not event.is_directory:
             fn = os.path.basename(event.src_path)
             time.sleep(2)
-            if event.src_path.lower().endswith(ALLOWED_EXTENTIONS) and not fn.startswith(('~', "gf_")) and not os.path.exists(event.src_path.lower()+'.sig'):
+            if event.src_path.lower().endswith(ALLOWED_EXTENTIONS) and not fn.startswith(('~', "gf_")) and not os.path.exists(event.src_path.lower()+'.sig') and not os.path.exists(event.src_path.lower()+'..sig') and not os.path.exists(event.src_path.lower()+'.1.sig'):
                 self.notify_callback(event.src_path)
 
 
