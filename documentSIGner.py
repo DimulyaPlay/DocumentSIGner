@@ -127,17 +127,22 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
 
         # Создаем подменю для "Тип штампа по умолчанию"
         self.stamp_type_menu = QtWidgets.QMenu("Тип штампа по умолчанию", menu)
-        self.radio_regular_stamp = QtWidgets.QAction("Обычный", self.stamp_type_menu)
+        self.radio_regular_stamp = QtWidgets.QAction("Обычный штамп", self.stamp_type_menu)
         self.radio_regular_stamp.setCheckable(True)
-        self.radio_regular_stamp.setChecked(config.get('stamp_type', 0) == 0)
+        self.radio_regular_stamp.setChecked(config.get('default_stamp_type', 0) == 0)
         self.radio_regular_stamp.triggered.connect(lambda: self.set_stamp_type(0))
         self.radio_copy_stamp = QtWidgets.QAction("Копия верна", self.stamp_type_menu)
         self.radio_copy_stamp.setCheckable(True)
-        self.radio_copy_stamp.setChecked(config.get('stamp_type', 0) == 1)
+        self.radio_copy_stamp.setChecked(config.get('default_stamp_type', 0) == 1)
         self.radio_copy_stamp.triggered.connect(lambda: self.set_stamp_type(1))
+        self.radio_auto_stamp = QtWidgets.QAction("Автовыбор (скрыть элементы)", self.stamp_type_menu)
+        self.radio_auto_stamp.setCheckable(True)
+        self.radio_auto_stamp.setChecked(config.get('default_stamp_type', 0) == 2)
+        self.radio_auto_stamp.triggered.connect(lambda: self.set_stamp_type(2))
         # Добавляем переключатели в подменю
         self.stamp_type_menu.addAction(self.radio_regular_stamp)
         self.stamp_type_menu.addAction(self.radio_copy_stamp)
+        self.stamp_type_menu.addAction(self.radio_auto_stamp)
         # Добавляем подменю в основное меню
         menu.addMenu(self.stamp_type_menu)
 
@@ -211,7 +216,7 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.radio_per_page.setChecked(page == 1)
 
     def set_stamp_type(self, stamp_type):
-        config['stamp_type'] = stamp_type
+        config['default_stamp_type'] = stamp_type
         save_config()
         # Обновляем состояние радиокнопок
         self.radio_regular_stamp.setChecked(stamp_type == 0)

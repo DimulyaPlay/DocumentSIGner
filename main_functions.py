@@ -400,6 +400,7 @@ class CustomListWidgetItem(QWidget):
         super().__init__()
         self.stamp_date = ''
         self.file_path = file_path.lower()
+        self.file_path_orig = file_path
         self.gf_file_path = None
         if self.file_path.endswith('.pdf'):
             # Получаем директорию и имя файла
@@ -447,8 +448,9 @@ class CustomListWidgetItem(QWidget):
         self.radio_all = QRadioButton("Все")
         self.radio_all.setEnabled(self.file_path.endswith('.pdf'))
         self.radio_all.setChecked(config.get('default_page', 2) == 3)
-        self.radio_custom = QRadioButton("Своё")
+        self.radio_custom = QRadioButton("")
         self.radio_custom.setEnabled(self.file_path.endswith('.pdf'))
+        self.radio_custom.setMaximumWidth(20)
         top_radio_layout.addWidget(self.radio_none)
         top_radio_layout.addWidget(self.radio_first)
         top_radio_layout.addWidget(self.radio_last)
@@ -474,15 +476,14 @@ class CustomListWidgetItem(QWidget):
         bottom_radio_layout.addWidget(QLabel('Вид штампа:             '))
         # Создаем отдельную группу для нижнего ряда радиокнопок
         self.stamp_radio_group = QButtonGroup(self)
-        self.radio_standard = QRadioButton("Обычный")
+        self.radio_standard = QRadioButton("Обычн.")
         self.radio_standard.setEnabled(self.file_path.endswith('.pdf'))
         self.radio_standard.setChecked(config.get('default_stamp_type', 0) == 0)
-        self.radio_verified_not_in_law = QRadioButton("Коп. верна не вступил")
+        self.radio_verified_not_in_law = QRadioButton("Коп. верна не вступ.")
         self.radio_verified_not_in_law.setEnabled(self.file_path.endswith('.pdf'))
         self.radio_verified_not_in_law.setChecked(config.get('default_stamp_type', 0) == 1)
-        self.radio_verified_in_law = QRadioButton("Коп. верна вступил")
+        self.radio_verified_in_law = QRadioButton("Коп. верна вступ.")
         self.radio_verified_in_law.setEnabled(self.file_path.endswith('.pdf'))
-        self.radio_verified_in_law.setChecked(config.get('default_stamp_type', 0) == 2)
         # Добавляем кнопки в группу
         self.stamp_radio_group.addButton(self.radio_standard)
         self.stamp_radio_group.addButton(self.radio_verified_not_in_law)
@@ -493,9 +494,11 @@ class CustomListWidgetItem(QWidget):
         self.date_input = QLineEdit()
         self.date_input.setPlaceholderText("Вступил(дд.мм.гггг)")
         self.date_input.setFixedWidth(115)
+        self.custom_pages.textEdited.connect(lambda: self.radio_verified_in_law.setChecked(True))
         self.parse_file_name_for_pages_and_stamps()
         bottom_radio_layout.addWidget(self.date_input)
-        right_layout.addLayout(bottom_radio_layout)
+        if config.get('default_stamp_type', 0) != 2:
+            right_layout.addLayout(bottom_radio_layout)
         # Добавляем правую часть в главный layout
         main_layout.addLayout(right_layout)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -527,7 +530,7 @@ class CustomListWidgetItem(QWidget):
             self.radio_custom.setChecked(True)
 
         # Извлечение вида штампа и даты
-        if "копия" in os.path.basename(self.file_path):
+        if "копия" in os.path.basename(self.file_path_orig):
             print(os.path.basename(self.file_path))
             if match := re.search(r'копия-(\d{2}\.\d{2}\.\d{4})', os.path.basename(self.file_path)):
                 self.stamp_date = match.group(1).split('-', 1)[-1]
@@ -578,7 +581,7 @@ class FileDialog(QDialog):
         else:
             self.rules = []
         # Добавляем QLabel с инструкцией
-        self.instruction_label = QLabel("Укажите страницы для размещения штампа на документе (только для PDF), выберите сертификат из списка и нажмите 'Подписать'")
+        self.instruction_label = QLabel("Укажите страницы для размещения/тип штампа на документе (только для PDF), выберите сертификат из списка и нажмите 'Подписать'")
         font = self.instruction_label.font()
         font.setPointSize(10)
         self.instruction_label.setFont(font)
@@ -1069,9 +1072,10 @@ class FileWatchHandler(FileSystemEventHandler):
 
     def on_created(self, event):
         if not event.is_directory:
-            fn = os.path.basename(event.src_path)
+            fn = os.path.basename(event.src_path.lower())
+            fp = event.src_path.lower()
             time.sleep(2)
-            if event.src_path.lower().endswith(ALLOWED_EXTENTIONS) and not fn.startswith(('~', "gf_")) and not os.path.exists(event.src_path.lower()+'.sig') and not os.path.exists(event.src_path.lower()+'..sig') and not os.path.exists(event.src_path.lower()+'.1.sig'):
+            if fp.endswith(ALLOWED_EXTENTIONS) and not fn.startswith(('~', "gf_")) and not os.path.exists(fp + '.sig') and not os.path.exists(fp + '..sig') and not os.path.exists(fp + '.1.sig'):
                 self.notify_callback(event.src_path)
 
 
