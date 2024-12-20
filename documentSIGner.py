@@ -11,7 +11,9 @@ import msvcrt
 import os
 import winshell
 
-# venv\Scripts\pyinstaller.exe --windowed --noconfirm --icon "C:\Users\CourtUser\Documents\PyCharmProjects\DocumentSIGner\icons8-legal-document-64.ico" --add-data "C:\Users\CourtUser\Documents\PyCharmProjects\DocumentSIGner\icons8-legal-document-64.ico;." --add-data "C:\Users\CourtUser\Documents\PyCharmProjects\DocumentSIGner\Update.exe;." --add-data "C:\Users\CourtUser\Documents\PyCharmProjects\DocumentSIGner\Update.cfg;." --add-data "C:\Users\CourtUser\Documents\PyCharmProjects\DocumentSIGner\dcs.png;."  C:\Users\CourtUser\Documents\PyCharmProjects\DocumentSIGner\documentSIGner.py
+# venv\Scripts\pyinstaller.exe --windowed --noconfirm --icon "icons8-legal-document-64.ico" --add-data "icons8-legal-document-64.ico;." --add-data "Update.exe;." --add-data "Update.cfg;." --add-data "dcs.png;." --add-data "dcs-copy-in-law.png;." --add-data "dcs-copy-no-in-law.png;." documentSIGner.py
+
+version = 'Версия 2.4 Сборка 201220241'
 
 def exception_hook(exc_type, exc_value, exc_traceback):
     """
@@ -53,6 +55,7 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
             os.mkdir(confirmations_path)
         self.rules_file = os.path.join(config_folder, 'rules.txt')
         menu = QtWidgets.QMenu(parent)
+        menu.addAction(version).setDisabled(True)
         self.toggle_soed_server = menu.addAction("СО ЭД сервер")
         self.toggle_soed_server.setCheckable(True)
         self.toggle_soed_server.triggered.connect(self.toggle_soed)
@@ -194,7 +197,9 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         if online_file_id:
             self.dialog.append_new_online_file_to_list(online_file_id, online_file_attr)
         else:
-            self.dialog.append_new_file_to_list(file_path)
+            res = self.dialog.append_new_file_to_list(file_path)
+            if not res:
+                return
         if not self.dialog.isActiveWindow() or self.dialog.isHidden():
             self.dialog.show()
             self.dialog.activateWindow()
@@ -445,11 +450,17 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
 
     def toggle_context_menu_option(self):
         if self.toggle_context_menu.isChecked():
-            add_to_context_menu()
-            config['context_menu'] = True
+            res = add_to_context_menu()
+            if res:
+                config['context_menu'] = True
+            else:
+                self.toggle_context_menu.setChecked(False)
         else:
-            remove_from_context_menu()
-            config['context_menu'] = False
+            res = remove_from_context_menu()
+            if res:
+                config['context_menu'] = False
+            else:
+                self.toggle_context_menu.setChecked(True)
         save_config()
 
     @Slot(str)
@@ -501,7 +512,7 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
             "Получен новый файл на подпись.",
             f"{os.path.basename(fp)}\n(нажмите здесь, чтобы открыть меню подписи)",
             QtWidgets.QSystemTrayIcon.Information,
-            3000  # Время отображения уведомления в миллисекундах
+            2500  # Время отображения уведомления в миллисекундах
         )
 
     def run_socket_server(self):
@@ -522,7 +533,9 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
                 if data:
                     file_path = data.decode()
                     print(f"Received file path: {file_path}")
-                    file_paths_queue.put(file_path)
+                    from main_functions import ALLOWED_EXTENTIONS
+                    if file_path.lower().endswith(ALLOWED_EXTENTIONS) and not file_path.startswith(('~', "gf_")):
+                        file_paths_queue.put(file_path)
 
     def exit(self):
         if first_instance:
@@ -560,7 +573,7 @@ def main():
         "Приложение запущено.",
         f"Нажмите на значок, чтобы открыть список документов на подпись",
         QtWidgets.QSystemTrayIcon.Information,
-        3000  # Время отображения уведомления в миллисекундах
+        1000  # Время отображения уведомления в миллисекундах
     )
     sys.exit(qt_app.exec_())
 
@@ -589,7 +602,9 @@ if __name__ == '__main__':
     else:
         if len(sys.argv) > 1:
             file_paths = sys.argv[1:]
-            file_paths_queue.put(file_paths[0])
+            from main_functions import ALLOWED_EXTENTIONS
+            if file_paths[0].lower().endswith(ALLOWED_EXTENTIONS) and not file_paths[0].startswith(('~', "gf_")):
+                file_paths_queue.put(file_paths[0])
         from flask_app import *
         sys.excepthook = exception_hook
         main()

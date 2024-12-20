@@ -52,7 +52,7 @@ ALLOWED_EXTENTIONS = ('.blp', '.bmp', '.dib', '.bufr', '.cur', '.pcx', '.dcx', '
                    '.iim', '.tif', '.tiff', '.jfif', '.jpe', '.jpg', '.jpeg', '.mic', '.mpg', '.mpeg', '.mpo',
                    '.msp', '.palm', '.pcd', '.pxr', '.pbm', '.pgm', '.ppm', '.pnm', '.psd', '.bw', '.rgb',
                    '.rgba', '.sgi', '.ras', '.tga', '.icb', '.vda', '.vst', '.webp', '.wmf', '.emf', '.xbm',
-                   '.xpm')
+                   '.xpm', ".txt")
 serial_names = ('Серийный номер', 'Serial')
 sha1 = ('SHA1 отпечаток', 'SHA1 Hash')
 date_make = ('Выдан', 'Not valid before')
@@ -166,12 +166,10 @@ def sign_document(s_source_file, cert_data):
             output = result.returncode
             if output == 2148081675:
                 print('Не удалось найти закрытый ключ')
-                print(result)
                 return 0
             elif os.path.isfile(f"{s_source_file}.sig"):
                 return f"{s_source_file}.sig"
             else:
-                print(result)
                 return 0
         else:
             print(f"Не удается найти исходный файл [{s_source_file}].")
@@ -284,18 +282,30 @@ def add_to_context_menu():
         reg.SetValue(key, key_path, reg.REG_SZ, "Подписать с помощью DocumentSIGner")
         reg.SetValue(key, command_key_path, reg.REG_SZ, exe_path_one)
         reg.SetValue(key, multi_select_key_path, reg.REG_SZ, exe_path_many)  # Set the command for multiple files
+        return 1
     except Exception as e:
-        print(f"Failed to add context menu: {e}")
+        QMessageBox.warning(None, 'Ошибка',
+                            "Не удалось изменить параметры реестра, программа должна запускаться от имени администратора")
+        return 0
 
 
 def remove_from_context_menu():
     key = reg.HKEY_CLASSES_ROOT
     key_path = r'*\shell\DocumentSIGner'
-
     try:
-        delete_registry_key(key, key_path)
+        open_key = reg.OpenKey(key, key_path, 0, reg.KEY_ALL_ACCESS)
+        num_subkeys, num_values, last_modified = reg.QueryInfoKey(open_key)
+
+        for i in range(num_subkeys):
+            subkey = reg.EnumKey(open_key, 0)
+            delete_registry_key(open_key, subkey)
+
+        reg.CloseKey(open_key)
+        reg.DeleteKey(key, key_path)
+        return 1
     except Exception as e:
-        print(f"Failed to remove context menu: {e}")
+        QMessageBox.warning(None, 'Ошибка', "Не удалось изменить параметры реестра, программа должна запускаться от имени администратора")
+        return 0
 
 
 def delete_registry_key(key, key_path):
@@ -389,9 +399,12 @@ def handle_dropped_files(file_paths, dialog=None):
         fn = os.path.basename(fp)
         if fp.lower().endswith(ALLOWED_EXTENTIONS) and not fn.startswith(('~', "gf_")):
             filtered_filepaths.append(fp)
-    dialog = FileDialog(filtered_filepaths)
-    dialog.show()
-    dialog.activateWindow()
+    if filtered_filepaths:
+        dialog = FileDialog(filtered_filepaths)
+        dialog.show()
+        dialog.activateWindow()
+    else:
+        QMessageBox.information(None, 'Ошибка', "Поддерживаемые файлы не обнаружены")
     return dialog
 
 
@@ -531,15 +544,12 @@ class CustomListWidgetItem(QWidget):
 
         # Извлечение вида штампа и даты
         if "копия" in os.path.basename(self.file_path_orig):
-            print(os.path.basename(self.file_path))
             if match := re.search(r'копия-(\d{2}\.\d{2}\.\d{4})', os.path.basename(self.file_path)):
                 self.stamp_date = match.group(1).split('-', 1)[-1]
                 self.radio_verified_in_law.setChecked(True)
                 self.date_input.setText(self.stamp_date)
-                print('in law')
             else:
                 self.radio_verified_not_in_law.setChecked(True)
-                print('nnot in law')
 
     def get_clean_file_path(self):
         if self.page_fragment:
@@ -572,6 +582,7 @@ class FileDialog(QDialog):
         self.layout.setSpacing(4)
         self.resize(600, 500)
         self.setMaximumWidth(1900)
+        self.setAcceptDrops(True)
         self.downloaded_server_files = downloaded_server_files
         self.rules_file = os.path.join(config_folder, 'rules.txt')
         # Загрузка и проверка файла по правилам из rules.txt
@@ -587,9 +598,14 @@ class FileDialog(QDialog):
         self.instruction_label.setFont(font)
         self.instruction_label.setAlignment(Qt.AlignCenter)
         self.layout.addWidget(self.instruction_label)
-
         self.file_list = QListWidget()
         self.file_list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.file_list.setAcceptDrops(True)
+        self.file_list.setDropIndicatorShown(True)
+        self.file_list.dragEnterEvent = self.dragEnterEvent
+        self.file_list.dragMoveEvent = self.dragMoveEvent
+        self.file_list.setDragDropMode(QAbstractItemView.DropOnly)
+        self.file_list.dropEvent = self.dropEvent_custom
         vertical_scroll_bar = self.file_list.verticalScrollBar()
         vertical_scroll_bar.setSingleStep(10)  # Значение в пикселях
         for file_path in file_paths:
@@ -648,14 +664,40 @@ class FileDialog(QDialog):
 
         self.setLayout(self.layout)
 
+    def dragEnterEvent(self, event):
+        """Обработка события при перетаскивании объекта."""
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dragMoveEvent(self, event):
+        """Разрешить движение курсора при перетаскивании."""
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent_custom(self, event):
+        """Обработка события при отпускании объекта."""
+        if event.mimeData().hasUrls():
+            for url in event.mimeData().urls():
+                file_path = url.toLocalFile()
+                self.append_new_file_to_list(file_path)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
     def request_stamp_positions_from_user(self, files_to_sign):
         for idx in files_to_sign:
-            file_path, pages, _, stamp = self.get_filepath_and_pages_for_sign(idx)
-            stamp_image = create_stamp_image(self.certificate_comboBox.currentText(),
-                                             self.certs_data[self.certificate_comboBox.currentText()], stamp)
-            if file_path and pages:
-                file_path_coords = get_stamp_coords_for_filepath(file_path, pages, stamp_image, stamp)
-                self.current_session_stamps.update(file_path_coords)
+            item = self.file_list.item(idx)
+            widget = self.file_list.itemWidget(item)
+            file_path = widget.file_path
+            if file_path.lower().endswith('.pdf'):
+                file_path, pages, _, stamp = self.get_filepath_and_pages_for_sign(idx)
+                stamp_image = create_stamp_image(self.certificate_comboBox.currentText(),
+                                                 self.certs_data[self.certificate_comboBox.currentText()], stamp)
+                if file_path and pages:
+                    file_path_coords = get_stamp_coords_for_filepath(file_path, pages, stamp_image, stamp)
+                    self.current_session_stamps.update(file_path_coords)
 
     def get_file_indexes_for_sign(self, all=False):
         if all:
@@ -833,6 +875,9 @@ class FileDialog(QDialog):
                 self.setFixedWidth(widget.sizeHint().width() + 35)
             self.file_list.setItemWidget(item, widget)
             print(file_path, "добавлен в список")
+            return 1
+        else:
+            return 0
 
     def append_new_online_file_to_list(self, file_id, file_attr):
         fn = file_attr['fileName']

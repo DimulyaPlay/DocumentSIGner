@@ -73,17 +73,21 @@ class Ui_MainWindow(QObject):
         elif event.type() == QEvent.Drop:
             urls = event.mimeData().urls()
             file_paths = []
+            show = 0
             for url in urls:
                 file_paths.append(url.toLocalFile())
             if self.dialog:
                 for file_path in file_paths:
-                    self.dialog.append_new_file_to_list(file_path)
-                self.dialog.show()
-                self.dialog.activateWindow()
+                    res = self.dialog.append_new_file_to_list(file_path)
+                    if res:
+                        show = 1
+                if show:
+                    self.dialog.show()
+                    self.dialog.activateWindow()
+                else:
+                    QMessageBox.information(None, 'Ошибка', "Не обнаружено поддерживаемых файлов")
             else:
                 self.dialog = handle_dropped_files(file_paths)
-                self.dialog.show()
-                self.dialog.activateWindow()
             return True
         return super().eventFilter(obj, event)
 
