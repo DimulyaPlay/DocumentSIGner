@@ -2,7 +2,6 @@ import sys
 import requests
 from PySide2 import QtWidgets, QtGui, QtCore
 from PySide2.QtCore import QTranslator, QLocale, QLibraryInfo, Signal, Slot
-from widget_ui import Ui_MainWindow
 from threading import Thread, Lock
 from glob import glob
 import socket
@@ -13,7 +12,7 @@ import winshell
 
 # venv\Scripts\pyinstaller.exe --windowed --noconfirm --icon "icons8-legal-document-64.ico" --add-data "icons8-legal-document-64.ico;." --add-data "Update.exe;." --add-data "Update.cfg;." --add-data "dcs.png;." --add-data "dcs-copy-in-law.png;." --add-data "dcs-copy-no-in-law.png;." documentSIGner.py
 
-version = 'Версия 2.4 Сборка 201220241'
+version = 'Версия 2.4 Сборка 271220241'
 
 def exception_hook(exc_type, exc_value, exc_traceback):
     """
@@ -63,9 +62,6 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.toggle_soed_api_cabinet.setCheckable(True)
         self.toggle_soed_api_cabinet.setChecked(bool(config.get('api_key')))
         self.toggle_soed_api_cabinet.triggered.connect(self.toggle_soed_api)
-        self.toggle_widget_visible = menu.addAction("Отображать виджет")
-        self.toggle_widget_visible.setCheckable(True)
-        self.toggle_widget_visible.triggered.connect(self.toggle_widget)
         self.toggle_stamp_on_original = menu.addAction("Штамп на оригинале")
         self.toggle_stamp_on_original.setCheckable(True)
         self.toggle_stamp_on_original.triggered.connect(self.toggle_stamp)
@@ -152,12 +148,6 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         exit_action = menu.addAction("Выход")
         exit_action.triggered.connect(self.exit)
         self.setContextMenu(menu)
-        self.widget = QtWidgets.QMainWindow()
-        self.ui = Ui_MainWindow()
-        self.ui.setupUi(self.widget)
-        self.widget.setWindowFlags(QtCore.Qt.Tool | QtCore.Qt.FramelessWindowHint | QtCore.Qt.WindowStaysOnTopHint)
-        self.widget.setAttribute(QtCore.Qt.WA_TranslucentBackground)
-        self.widget.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
         # Запускаем Flask в отдельном потоке
         if config['soed']:
             self.toggle_soed_server.setChecked(True)
@@ -167,9 +157,6 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         else:
             self.setToolTip(f'DocumentSIGner отключен от сети.')
         self.toggle_stamp_on_original.setChecked(config['stamp_on_original'])
-        if config['widget_visible']:
-            self.toggle_widget_visible.setChecked(True)
-            self.widget.show()
         # Запуск сокет-сервера в отдельном потоке
         self.socket_server_thread = Thread(target=self.run_socket_server, daemon=True)
         self.socket_server_thread.start()
@@ -295,14 +282,6 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.rules_dialog.show()
         self.rules_dialog.activateWindow()
 
-    def toggle_widget(self):
-        if self.toggle_widget_visible.isChecked():
-            self.widget.show()
-            config['widget_visible'] = True
-        else:
-            self.widget.hide()
-            config['widget_visible'] = False
-        save_config()
 
     def toggle_startup(self):
         def create_shortcut(shortcut_path):

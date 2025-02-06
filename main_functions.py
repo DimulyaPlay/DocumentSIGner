@@ -331,12 +331,17 @@ def add_stamp(pdf_path, stamp_path, pagelist, custom_coords=None):
     try:
         doc = fitz.open(pdf_path)
         img_stamp = fitz.Pixmap(stamp_path)  # Загружаем изображение
+        metadata = doc.metadata
+        # Проверка, был ли документ создан с помощью "Microsoft: Print To PDF"
+        is_microsoft_pdf = 'Microsoft: Print To PDF' in (metadata.get('producer', '') + metadata.get('creator', ''))
         print('Добавление штампа на страницы', pagelist)
         if pagelist == 'all':
             pagelist = range(len(doc))
         for page_index in pagelist:
             if page_index == -1:
                 page_index = len(doc)-1
+            if is_microsoft_pdf:
+                doc[page_index].clean_contents()
             img_width, img_height = img_stamp.width / 4.5, img_stamp.height / 4.5
             page_width = doc[page_index].rect.width
             page_height = doc[page_index].rect.height
@@ -528,7 +533,7 @@ class CustomListWidgetItem(QWidget):
 
     def open_file(self, event):
         if self.gf_file_path and os.path.exists(self.gf_file_path):
-            os.startfile(self.gf_file_path)
+            os.startfile(os.path.normpath(self.gf_file_path))
         else:
             os.startfile(self.file_path)
 

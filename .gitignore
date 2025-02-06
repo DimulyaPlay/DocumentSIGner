@@ -5,3 +5,7 @@
 /downloaded_soed_files/
 /confirmations/
 /.idea/
+/dist/
+/build/
+/documentSIGner.spec
+/rules.txt
