@@ -13,6 +13,7 @@ from PIL import Image, ImageDraw, ImageFont
 import requests
 import tempfile
 import fitz
+from threading import Lock, Timer,Thread
 import base64
 import winreg as reg
 from PySide2.QtWidgets import (QApplication, QAbstractItemView, QAction, QDialog,
@@ -21,7 +22,7 @@ from PySide2.QtWidgets import (QApplication, QAbstractItemView, QAction, QDialog
                                QLabel, QRadioButton, QLineEdit, QPushButton,
                                QFileDialog, QWidget, QComboBox, QCheckBox, QMessageBox,
                                QSlider, QButtonGroup, QFrame)
-from PySide2.QtCore import Qt, QThread, Signal, QRect, QSize, QLineF
+from PySide2.QtCore import Qt, QThread, Signal, QRect, QSize, QLineF, QPoint
 from PySide2.QtGui import QIcon, QMovie, QPixmap, QPainter
 from queue import Queue
 import fnmatch
@@ -61,8 +62,6 @@ date_exp = ('Истекает', 'Not valid after')
 
 def read_create_config(config_path):
     default_configuration = {
-        'soed': True,
-        'port': '4999',
         "stamp_on_original": True,
         "csp_path": r"C:\Program Files\Crypto Pro\CSP",
         'last_cert': '',
@@ -74,23 +73,16 @@ def read_create_config(config_path):
         'notify': False
     }
 
-    def update_configuration(configuration, default_configuration):
-        for key, value in default_configuration.items():
-            if key not in configuration:
-                configuration[key] = value
-        return configuration
-
+    configuration = default_configuration.copy()
     if os.path.exists(config_path):
         try:
             with open(config_path, 'r') as configfile:
-                configuration = json.load(configfile)
-                configuration = update_configuration(configuration, default_configuration)
+                configuration_opened = json.load(configfile)
+                for k, v in configuration_opened.items():
+                    configuration[k] = v
         except Exception as e:
             print(e)
             os.remove(config_path)
-            configuration = default_configuration
-    else:
-        configuration = default_configuration
     with open(config_path, 'w') as configfile:
         json.dump(configuration, configfile, indent=4)
     return configuration
@@ -138,7 +130,8 @@ def get_cert_data():
                         cert[cleaned_row[0]] = cleaned_row[1]
                         if 'CN=' in cleaned_row[1] and 'CN=Казначейство России' not in cleaned_row[1]:
                             cert_name = re.search(r'CN=([^\n]+)', cleaned_row[1]).group(1)
-                            certs_data[cert_name] = cert
+                            if cert_name.lower() not in ('федеральное казначейство',):
+                                certs_data[cert_name] = cert
         except subprocess.CalledProcessError as e:
             print(f"Ошибка выполнения команды: {e}")
         return certs_data
@@ -197,26 +190,39 @@ def check_chosen_pages(chosen_pages_string):
     return sorted(pages)
 
 
-def get_stamp_coords_for_filepath(file_path, pages, stamp_image, stamp_type):
+def get_stamp_coords_for_filepath(file_path, pages, stamp_image):
     from stamp_editor import PlaceImageStampOnA4
-    results = {}
-    doc = fitz.open(file_path)
-    pages = range(len(doc)) if pages == 'all' else pages
-    for page_index in pages:
-        if page_index == -1:
-            page_index = len(doc) - 1
-        page = doc[page_index]
-        page_size = page.rect
-        pix = page.get_pixmap(dpi=150)
-        page_image_path = f"temp_page_{page_index}.png"
-        pix.save(page_image_path)
-        dialog = PlaceImageStampOnA4(page_image_path, (page_size.width, page_size.height), stamp_image)
-        dialog.exec_()
-        coords_and_scale = dialog.get_stamp_coordinates_and_scale()
-        results[page_index] = coords_and_scale
-        os.remove(page_image_path)
-    doc.close()
-    return {file_path: results}
+    dialog = PlaceImageStampOnA4(file_path, pages, stamp_image)
+    if dialog.exec_() == QDialog.Accepted:
+        results = {}
+        doc = fitz.open(file_path)
+        # Берём все данные, сохранённые в диалоге
+        dialog_data = dialog.get_results()[file_path]
+        print(dialog_data)
+        for page_idx, data in dialog_data.items():
+            page = doc[page_idx]
+            real_width = page.rect.width
+            real_height = page.rect.height
+            # Коэффициенты масштабирования между «экранной» отрисовкой и реальным PDF-размером
+            page_image_w = dialog.stamp_widget.page_image.width()
+            page_image_h = dialog.stamp_widget.page_image.height()
+            scale_x = real_width / page_image_w
+            scale_y = real_height / page_image_h
+            # Позиция штампа в координатах PDF
+            disp_x, disp_y = data['position']  # позиция в координатах виджета
+            x = disp_x * scale_x
+            y = disp_y * scale_y
+            # Размер штампа в координатах PDF
+            # Штамп на экране = оригинальная ширина (в пикселях) * current_scale
+            disp_stamp_w = dialog.stamp_widget.stamp_original.width() * data['scale']
+            disp_stamp_h = dialog.stamp_widget.stamp_original.height() * data['scale']
+            w = disp_stamp_w * scale_x
+            h = disp_stamp_h * scale_y
+            results[page_idx] = (x, y, x + w, y + h)
+
+        doc.close()
+        print(results)
+        return {file_path: results}
 
 
 def create_stamp_image(cert_name, cert_info, stamp='regular'):
@@ -335,26 +341,28 @@ def add_stamp(pdf_path, stamp_path, pagelist, custom_coords=None):
         # Проверка, был ли документ создан с помощью "Microsoft: Print To PDF"
         is_microsoft_pdf = 'Microsoft: Print To PDF' in (metadata.get('producer', '') + metadata.get('creator', ''))
         print('Добавление штампа на страницы', pagelist)
-        if pagelist == 'all':
-            pagelist = range(len(doc))
-        for page_index in pagelist:
-            if page_index == -1:
-                page_index = len(doc)-1
-            if is_microsoft_pdf:
-                doc[page_index].clean_contents()
-            img_width, img_height = img_stamp.width / 4.5, img_stamp.height / 4.5
-            page_width = doc[page_index].rect.width
-            page_height = doc[page_index].rect.height
-            x0 = (page_width / 2) - (img_width / 2)
-            y0 = page_height-img_height-25
-            x1 = x0 + img_width
-            y1 = y0 + img_height
-            img_rect = fitz.Rect(x0, y0, x1, y1)
-            if custom_coords:
-                custom_coord = custom_coords.get(page_index, None)
-                img_rect = custom_coord if custom_coord else img_rect
-            doc[page_index].insert_image(img_rect, pixmap=img_stamp)
-            print('штамп создан', page_index, img_rect)
+        if pagelist and not custom_coords:
+            if pagelist == 'all':
+                pagelist = range(len(doc))
+            for page_index in pagelist:
+                if page_index == -1:
+                    page_index = len(doc)-1
+                if is_microsoft_pdf:
+                    doc[page_index].clean_contents()
+                img_width, img_height = img_stamp.width / 4.5, img_stamp.height / 4.5
+                page_width = doc[page_index].rect.width
+                page_height = doc[page_index].rect.height
+                x0 = (page_width / 2) - (img_width / 2)
+                y0 = page_height-img_height-25
+                x1 = x0 + img_width
+                y1 = y0 + img_height
+                img_rect = fitz.Rect(x0, y0, x1, y1)
+                doc[page_index].insert_image(img_rect, pixmap=img_stamp)
+                print('Стандартный штамп создан', page_index, img_rect)
+        if custom_coords:
+            for page_index, coords in custom_coords.items():
+                doc[page_index].insert_image(coords, pixmap=img_stamp)
+                print('Кастомный штамп создан', page_index, coords)
         temp_path = pdf_path + ".tmp"
         doc.save(temp_path, deflate=True)
         doc.close()
@@ -363,28 +371,6 @@ def add_stamp(pdf_path, stamp_path, pagelist, custom_coords=None):
         print('Не удалось добавить штамп на', pdf_path)
         traceback.print_exc()
     return pdf_path
-
-
-def check_api_key(api_key):
-    try:
-        decoded_data = base64.b64decode(api_key).decode()
-        key_data = json.loads(decoded_data)
-        required_fields = ['url', 'port', 'username', 'api_key']
-        if not all(field in key_data for field in required_fields):
-            return False, None, None
-        url = key_data['url']
-        port = key_data['port']
-        try:
-            port = int(port)
-            if not (0 < port < 65536):
-                return False, None, None
-        except ValueError:
-            traceback.print_exc()
-            return False, None, None
-        return True, url, port
-    except (json.JSONDecodeError, base64.binascii.Error, KeyError):
-        traceback.print_exc()
-        return False, None, None
 
 
 def resource_path(relative_path):
@@ -524,7 +510,6 @@ class CustomListWidgetItem(QWidget):
         self.setLayout(main_layout)
 
     def show_context_menu(self, pos):
-        # Создаем контекстное меню
         menu = QMenu(self)
         open_in_folder_action = QAction("Показать в папке", self)
         open_in_folder_action.triggered.connect(lambda: self.open_in_explorer(self.file_path))
@@ -566,16 +551,12 @@ class CustomListWidgetItem(QWidget):
         self.file_label.setStyleSheet(f'background-color: {color}; border-radius: 4px; padding-left: 3px; padding-right: 3px; margin-right: 3px')
 
     def open_in_explorer(self, filepath: str):
-        """
-        Показать файл/папку в проводнике
-        @param filepath: путь к файлу
-        """
         filepath = filepath.replace('/', '\\')
         subprocess.Popen(fr'explorer /select,"{filepath}')
 
 
 class FileDialog(QDialog):
-    def __init__(self, file_paths, downloaded_server_files=dict()):
+    def __init__(self, file_paths):
         super().__init__()
         self.current_session_stamps = None
         self.certs_data = get_cert_data()
@@ -588,7 +569,6 @@ class FileDialog(QDialog):
         self.resize(600, 500)
         self.setMaximumWidth(1900)
         self.setAcceptDrops(True)
-        self.downloaded_server_files = downloaded_server_files
         self.rules_file = os.path.join(config_folder, 'rules.txt')
         # Загрузка и проверка файла по правилам из rules.txt
         if os.path.exists(self.rules_file):
@@ -596,7 +576,6 @@ class FileDialog(QDialog):
                 self.rules = file.readlines()
         else:
             self.rules = []
-        # Добавляем QLabel с инструкцией
         self.instruction_label = QLabel("Укажите страницы для размещения/тип штампа на документе (только для PDF), выберите сертификат из списка и нажмите 'Подписать'")
         font = self.instruction_label.font()
         font.setPointSize(10)
@@ -656,7 +635,7 @@ class FileDialog(QDialog):
         self.loading_label.setStyleSheet("background-color: transparent;")  # Удаляем фон
         layout_buttons.addWidget(self.loading_label)
 
-        self.movie = QMovie(os.path.join(os.path.dirname(sys.argv[0]), '35.gif'))
+        self.movie = QMovie(resource_path('35.gif'))
         self.movie.setScaledSize(self.loading_label.size())  # Масштабируем анимацию до размера QLabel
 
         self.sign_button_chosen = QPushButton("Подписать отмеченные")
@@ -697,11 +676,11 @@ class FileDialog(QDialog):
             widget = self.file_list.itemWidget(item)
             file_path = widget.file_path
             if file_path.lower().endswith('.pdf'):
-                file_path, pages, _, stamp = self.get_filepath_and_pages_for_sign(idx)
+                file_path, pages, stamp = self.get_filepath_and_pages_for_sign(idx)
                 stamp_image = create_stamp_image(self.certificate_comboBox.currentText(),
                                                  self.certs_data[self.certificate_comboBox.currentText()], stamp)
                 if file_path and pages:
-                    file_path_coords = get_stamp_coords_for_filepath(file_path, pages, stamp_image, stamp)
+                    file_path_coords = get_stamp_coords_for_filepath(file_path, pages, stamp_image)
                     self.current_session_stamps.update(file_path_coords)
 
     def get_file_indexes_for_sign(self, all=False):
@@ -774,7 +753,6 @@ class FileDialog(QDialog):
         widget = self.file_list.itemWidget(item)
         file_path = widget.file_path
         file_path_clean = widget.get_clean_file_path()
-        soed_file_id = widget.file_id
         if file_path != file_path_clean:
             shutil.move(file_path, file_path_clean)
             file_path = file_path_clean
@@ -795,15 +773,16 @@ class FileDialog(QDialog):
             stamp = 'copy'
         else:
             stamp = 'regular'
-        return file_path, pages, soed_file_id, stamp
+        return file_path, pages, stamp
 
     def sign_file(self, index):
         try:
             filepath_to_stamp = ''
-            file_path, pages, soed_file_id, stamp = self.get_filepath_and_pages_for_sign(index)
+            file_path, pages, stamp = self.get_filepath_and_pages_for_sign(index)
             print(f"Файл: {file_path}, Страницы: {pages}")
             custom_coords = self.current_session_stamps.get(file_path)
-            if file_path.lower().endswith('.pdf') and pages:
+            backup_file = shutil.copy(file_path, file_path + '_bkp')
+            if file_path.lower().endswith('.pdf') and (pages or custom_coords):
                 stamp_image_path = create_stamp_image(self.certificate_comboBox.currentText(), self.certs_data[self.certificate_comboBox.currentText()], stamp)
                 if not self.sign_original.isChecked():
                     filepath_to_stamp = os.path.join(os.path.dirname(file_path),
@@ -813,38 +792,12 @@ class FileDialog(QDialog):
                 else:
                     add_stamp(file_path, stamp_image_path, pages, custom_coords)
             sign_path = sign_document(file_path, self.certs_data[self.certificate_comboBox.currentText()])
-            if soed_file_id:
-                if os.path.isfile(sign_path):
-                    fd, zip_to_send = tempfile.mkstemp(f'.zip')
-                    os.close(fd)
-                    with zipfile.ZipFile(zip_to_send, 'w') as zipf:
-                        zipf.write(file_path, os.path.basename(file_path))
-                        zipf.write(sign_path, os.path.basename(sign_path))
-                        if filepath_to_stamp:
-                            zipf.write(filepath_to_stamp, os.path.basename(filepath_to_stamp))
-                        else:
-                            zipf.write(file_path, f'gf_{os.path.basename(file_path)}')
-                    result = self.send_zip_to_soed(zip_to_send, soed_file_id)
-                    for fp in [zip_to_send, file_path, sign_path, filepath_to_stamp]:
-                        try:
-                            os.remove(fp)
-                        except:
-                            pass
-                    if not result:
-                        del self.downloaded_server_files[soed_file_id]
-                        return 0, '', file_path
-                    else:
-                        return 1, result, file_path
-                else:
-                    return 1, 'Не удалось найти sig фал при проверке', file_path
-
             if sign_path:
-                # Блок проверки пользовательских правил перемещения
+                os.remove(backup_file)
                 for rule in self.rules:
                     source_dir, patterns, dest_dir, _ = rule.strip().split('|')
                     if file_path.startswith(source_dir):
                         patterns_list = patterns.split(';')
-                        # Проверяем, соответствует ли файл всем паттернам
                         all_patterns_match = True
                         for pattern in patterns_list:
                             if not fnmatch.fnmatch(os.path.basename(file_path), pattern):
@@ -852,7 +805,6 @@ class FileDialog(QDialog):
                                 break
                         if all_patterns_match:
                             if os.path.dirname(file_path) != os.path.abspath(dest_dir):
-                                # Перемещаем файл в целевую директорию
                                 new_file_path = os.path.join(dest_dir, os.path.basename(file_path))
                                 shutil.move(file_path, dest_dir)
                                 shutil.move(sign_path, dest_dir)
@@ -861,6 +813,9 @@ class FileDialog(QDialog):
                                     shutil.move(filepath_to_stamp, dest_dir)
             else:
                 print(f'Не удалось подписать {file_path}')
+                if filepath_to_stamp and os.path.exists(filepath_to_stamp):
+                    os.unlink(filepath_to_stamp)
+                shutil.move(backup_file, file_path)
                 return 1, '', file_path
         except Exception as e:
             print(f'Не удалось подписать: {e}')
@@ -883,44 +838,6 @@ class FileDialog(QDialog):
             return 1
         else:
             return 0
-
-    def append_new_online_file_to_list(self, file_id, file_attr):
-        fn = file_attr['fileName']
-        file_path = file_attr['filePath']
-        sig_pages = file_attr['sigPages']
-        item = QListWidgetItem(self.file_list)
-        widget = CustomListWidgetItem(file_path, file_id=file_id, name=fn, sig_pages=sig_pages)
-        item.setSizeHint(widget.sizeHint())
-        if self.width() < widget.sizeHint().width() + 35:
-            self.setFixedWidth(widget.sizeHint().width() + 35)
-        self.file_list.setItemWidget(item, widget)
-        print(file_path, "добавлен в список")
-
-    def send_zip_to_soed(self, zip_to_send, soed_file_id):
-        ip_server = config.get('soed_url')
-        port_server = config.get('soed_port')
-        api_key = config.get('api_key')
-        # Проверка наличия URL и порта
-        if not ip_server or not port_server:
-            raise ValueError("URL или порт не указаны в конфигурации")
-        url = f"https://{ip_server}:{port_server}/ext/upload-signed-file"
-        headers = {'X-API-KEY': api_key}
-        # Параметры запроса
-        params = {'fileId': soed_file_id}
-        # Открываем файл ZIP для отправки
-        with open(zip_to_send, 'rb') as file:
-            files = {'file': file}
-            # Отправка POST-запроса
-            response = requests.post(url, headers=headers, data=params, files=files, verify=False, proxies={'http': False, 'https': False})
-        # Проверка ответа
-        if response.status_code == 200:
-            result = response.json()
-            if not result.get('error'):
-                return 0
-            else:
-                return f"Ошибка при отправке: {result.get('error_message')}"
-        else:
-            return f"Ошибка подключения: статус {response.status_code}"
 
     def closeEvent(self, event):
         self.file_list.clear()
@@ -1119,14 +1036,37 @@ class FileWatchHandler(FileSystemEventHandler):
     def __init__(self, notify_callback):
         super().__init__()
         self.notify_callback = notify_callback
+        self.new_files = []  # Список новых файлов
+        self.lock = Lock()
+        self.notification_timer = None
 
     def on_created(self, event):
         if not event.is_directory:
-            fn = os.path.basename(event.src_path.lower())
-            fp = event.src_path.lower()
-            time.sleep(2)
-            if fp.endswith(ALLOWED_EXTENTIONS) and not fn.startswith(('~', "gf_")) and not os.path.exists(fp + '.sig') and not os.path.exists(fp + '..sig') and not os.path.exists(fp + '.1.sig'):
-                self.notify_callback(event.src_path)
+            Thread(target=self.process_file, args=(event.src_path,), daemon=True).start()
+
+    def process_file(self, fp):
+        time.sleep(2)  # Ожидание, чтобы сигнатурный файл успел появиться
+        fn = os.path.basename(fp.lower())
+        fp = fp.lower()
+        if fp.endswith(ALLOWED_EXTENTIONS) and not fn.startswith(('~', "gf_")) and not os.path.exists(fp + '.sig') and not os.path.exists(fp + '..sig') and not os.path.exists(fp + '.1.sig'):
+            self.add_new_file(fp)
+
+    def add_new_file(self, fp):
+        with self.lock:
+            self.new_files.append(fp)
+            if self.notification_timer is None:
+                self.notification_timer = Timer(2, self.send_notification)
+                self.notification_timer.start()
+
+    def send_notification(self):
+        with self.lock:
+            if len(self.new_files) == 1:
+                self.notify_callback(self.new_files[0])
+            else:
+                self.notify_callback(f"{len(self.new_files)} новых файлов")
+            self.new_files.clear()
+            self.notification_timer = None
+
 
 
 class FileWatcher:
