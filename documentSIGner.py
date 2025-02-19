@@ -1,11 +1,13 @@
 import sys
+from traceback import print_tb
+
 import requests
 from PySide2 import QtWidgets, QtGui, QtCore
 from PySide2.QtCore import QTranslator, QLocale, QLibraryInfo, Signal, Slot
 from threading import Thread, Lock
 from glob import glob
 import socket
-from main_functions import resource_path, config_folder, FileWatcher, add_to_context_menu, remove_from_context_menu, RulesDialog, config, save_config, send_file_path_to_existing_instance, file_paths_queue, QueueMonitorThread, FileDialog, handle_dropped_files
+from main_functions import resource_path, config_folder, update_updater, FileWatcher, add_to_context_menu, remove_from_context_menu, RulesDialog, config, save_config, send_file_path_to_existing_instance, file_paths_queue, QueueMonitorThread, FileDialog, handle_dropped_files
 import msvcrt
 import os
 import winshell
@@ -13,7 +15,7 @@ import traceback
 
 # venv\Scripts\pyinstaller.exe --windowed --noconfirm --icon "icons8-legal-document-64.ico" --add-data "icons8-legal-document-64.ico;." --add-data "Update.exe;." --add-data "Update.cfg;." --add-data "dcs.png;." --add-data "dcs-copy-in-law.png;." --add-data "dcs-copy-no-in-law.png;." documentSIGner.py
 
-version = 'Версия 2.5 Сборка 100220251'
+version = 'Версия 2.5 Сборка 140220251'
 
 def exception_hook(exc_type, exc_value, exc_traceback):
     """
@@ -136,7 +138,7 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
 
     def add_file_to_list(self, file_path):
         if file_path == 'activate':
-            self.show_menu()
+            self.show_menu('activate')
             return
         res = self.dialog.append_new_file_to_list(file_path)
         if not res:
@@ -170,7 +172,7 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
             if self.dialog.isVisible():
                 self.dialog.activateWindow()
                 return
-            if reason == QtWidgets.QSystemTrayIcon.Trigger:
+            if reason == QtWidgets.QSystemTrayIcon.Trigger or reason == 'activate':
                 file_list_for_sign = self.get_list_for_sign()
                 if file_list_for_sign:
                     for fp in file_list_for_sign:
@@ -320,7 +322,7 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
                     file_path = data.decode()
                     print(f"Received file path: {file_path}")
                     from main_functions import ALLOWED_EXTENTIONS
-                    if file_path.lower().endswith(ALLOWED_EXTENTIONS) and not file_path.startswith(('~', "gf_")):
+                    if (file_path.lower().endswith(ALLOWED_EXTENTIONS) and not file_path.startswith(('~', "gf_"))) or file_path=='activate':
                         file_paths_queue.put(file_path)
 
     def exit(self):
@@ -373,6 +375,10 @@ if __name__ == '__main__':
             if result:
                 sys.exit(0)
     else:
+        try:
+            update_updater()
+        except Exception as e:
+            print(e)
         if len(sys.argv) > 1:
             file_paths = sys.argv[1:]
             from main_functions import ALLOWED_EXTENTIONS

@@ -1080,3 +1080,25 @@ class FileWatcher:
         event_handler = FileWatchHandler(self.notify_callback)
         self.observer.schedule(event_handler, self.directory_to_watch, recursive=False)
         self.observer.start()
+
+
+def update_updater():
+    import configparser
+    # Загрузка конфигурационного файла
+    config = configparser.ConfigParser()
+    config.read('update.cfg')
+    reference_folder = config['Settings']['reference_folder']
+    # Файлы для обновления обновлятора
+    updater_files = ['update.exe', 'update.cfg']
+    # Проверка и копирование новых версий файлов обновлятора
+    for file in updater_files:
+        local_file_path = os.path.join(os.getcwd(), file)
+        reference_file_path = os.path.join(reference_folder, file)
+
+        if os.path.exists(reference_file_path) and os.path.exists(local_file_path):
+            if os.path.getmtime(reference_file_path) > os.path.getmtime(local_file_path):
+                # Копирование файла
+                shutil.copy2(reference_file_path, local_file_path)
+                print(f"Updated {file} to the latest version.")
+            else:
+                print(f'{file} is no need in updates')
