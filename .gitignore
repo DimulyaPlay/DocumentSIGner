@@ -9,3 +9,5 @@
 /build/
 /documentSIGner.spec
 /rules.txt
+/dist_nuitka/
+/.venv/

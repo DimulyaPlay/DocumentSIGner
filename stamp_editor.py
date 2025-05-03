@@ -53,14 +53,22 @@ class PlaceImageStampOnA4(QDialog):
         self.setWindowTitle('Переместите штамп на нужное место')
         self.layout = QVBoxLayout()
         self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(2)
+        # Виджет для размещения штампа в отдельном фрейме
+        self.page_frame = QFrame()
+        self.page_layout = QVBoxLayout()
+        self.page_layout.setContentsMargins(0, 0, 0, 0)
+        self.page_layout.setSpacing(0)
 
-        # Виджет для размещения штампа
         self.stamp_widget = ImageStampWidget(self.stamp_image_path)
-        self.layout.addWidget(self.stamp_widget)
+        self.page_layout.addWidget(self.stamp_widget)
+        self.page_frame.setLayout(self.page_layout)
+
+        self.layout.addWidget(self.page_frame)
 
         # Панель управления (нижняя полоса с кнопками и слайдером)
         control_panel = QHBoxLayout()
-        control_panel.setContentsMargins(5, 0, 5, 5)
+        control_panel.setContentsMargins(5, 0, 5, 2)
 
         # Кнопки навигации (актуальны только в режиме single)
         self.prev_btn = QPushButton("← Предыдущая")
@@ -84,7 +92,7 @@ class PlaceImageStampOnA4(QDialog):
 
         # Кнопки подтверждения и пропуска
         btn_box = QHBoxLayout()
-        btn_box.setContentsMargins(5, 0, 5, 5)
+        btn_box.setContentsMargins(5, 0, 5, 2)
 
         # Для многостраничного режима кнопка может называться «Далее»/«Применить»
         # Для одностраничного – всегда «Применить»
@@ -118,9 +126,9 @@ class PlaceImageStampOnA4(QDialog):
 
         # Определяем «стандартный» размер страницы A4-ish с учётом ориентации
         if page.rect.width > page.rect.height:
-            page_size = QSize(842, 595)  # Альбомная
+            page_size = QSize(790, 557)  # Альбомная
         else:
-            page_size = QSize(595, 842)  # Портретная
+            page_size = QSize(557, 790)  # Портретная
 
         # Если мы уже что-то сохранили для этой страницы, подставим:
         saved_state = self.results.get(page_idx, None)
@@ -128,8 +136,8 @@ class PlaceImageStampOnA4(QDialog):
         # Передаём полученную картинку и размер в ImageStampWidget
         self.stamp_widget.set_page(QPixmap(temp_path), page_size, saved_state)
 
-        # Устанавливаем фиксированный размер диалога
-        self.setFixedSize(page_size)
+        # Ограничиваем размер только page_frame, а не всего диалога
+        self.page_frame.setFixedSize(page_size)
 
     # ---------------------- МНОГОСТРАНИЧНЫЙ РЕЖИМ ----------------------
     def apply_changes(self):

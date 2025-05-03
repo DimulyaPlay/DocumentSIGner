@@ -1,21 +1,19 @@
 import sys
-from traceback import print_tb
-
-import requests
-from PySide2 import QtWidgets, QtGui, QtCore
-from PySide2.QtCore import QTranslator, QLocale, QLibraryInfo, Signal, Slot
+import time
 from threading import Thread, Lock
-from glob import glob
+from PySide2.QtCore import QTranslator, QLocale, QLibraryInfo
+from PySide2 import QtWidgets, QtGui, QtCore
 import socket
-from main_functions import resource_path, config_folder, update_updater, FileWatcher, add_to_context_menu, remove_from_context_menu, RulesDialog, config, save_config, send_file_path_to_existing_instance, file_paths_queue, QueueMonitorThread, FileDialog, handle_dropped_files
+from main_functions import resource_path, remove_old_from_context_menu, toggle_startup_registry, filter_inappropriate_files, config_folder, update_updater, FileWatcher, add_to_context_menu, remove_from_context_menu, RulesDialog, config, save_config, send_file_path_to_existing_instance, file_paths_queue, QueueMonitorThread, FileDialog, handle_dropped_files
 import msvcrt
 import os
-import winshell
 import traceback
+from notifications import show_notification, notifier
 
-# venv\Scripts\pyinstaller.exe --windowed --noconfirm --icon "icons8-legal-document-64.ico" --add-data "icons8-legal-document-64.ico;." --add-data "Update.exe;." --add-data "Update.cfg;." --add-data "dcs.png;." --add-data "dcs-copy-in-law.png;." --add-data "dcs-copy-no-in-law.png;." documentSIGner.py
+# .venv\Scripts\pyinstaller.exe --windowed --noconfirm --icon "icons8-legal-document-64.ico" --add-data "icons8-legal-document-64.ico;." --add-data "Update.exe;." --add-data "Update.cfg;." --add-data "dcs.png;." --add-data "dcs-copy-in-law.png;." --add-data "dcs-copy-no-in-law.png;." documentSIGner.py
 
-version = 'Версия 2.5 Сборка 140220251'
+version = 'Версия 2.5 Сборка 010520251'
+
 
 def exception_hook(exc_type, exc_value, exc_traceback):
     """
@@ -35,7 +33,7 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         QtWidgets.QSystemTrayIcon.__init__(self, icon, parent)
         self.activated.connect(self.show_menu)
         self.notifiers = []
-        self.dialog = FileDialog([])
+        self.dialog = FileDialog([], tray_gui=self)
         self.messageClicked.connect(self.show_menu)
         self.rules_file = os.path.join(config_folder, 'rules.txt')
         menu = QtWidgets.QMenu(parent)
@@ -133,8 +131,42 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.queue_thread = QueueMonitorThread()
         self.queue_thread.file_path_signal.connect(self.add_file_to_list)
         self.queue_thread.start()
+        self.last_icon_count = -1
+        self.icon = QtGui.QIcon(resource_path('icons8-legal-document-64.ico'))
+        self.setIcon(self.icon)
+        self.start_doc_count_monitor()
+        self.update_label_text()
         if config['notify']:
             self.create_notifiers()
+
+    def start_doc_count_monitor(self):
+        self.icon_timer = QtCore.QTimer()
+        self.icon_timer.timeout.connect(self.update_label_text)
+        self.icon_timer.start(30000)  # каждые 30 секунд
+
+    def update_label_text(self):
+        try:
+            number = len(self.get_list_for_sign())
+            if number == self.last_icon_count:
+                return
+            self.last_icon_count = number
+            base_icon = QtGui.QIcon(resource_path('icons8-legal-document-64.ico'))
+            pixmap = base_icon.pixmap(48, 48)
+            painter = QtGui.QPainter(pixmap)
+            if number > 0:
+                painter.setRenderHint(QtGui.QPainter.Antialiasing)
+                painter.setPen(QtGui.QColor("red"))
+                painter.setBrush(QtGui.QColor("red"))
+                painter.drawEllipse(15, 14, 32, 33)
+                painter.setFont(QtGui.QFont("Arial", 20, QtGui.QFont.Bold))
+                painter.setPen(QtGui.QColor("white"))
+                x_offset = 5 if number > 9 else 2
+                painter.drawText(QtCore.QPointF(24 - x_offset, 41), str(number))
+            painter.end()
+            self.setIcon(QtGui.QIcon(pixmap))
+
+        except Exception as e:
+            print("Ошибка обновления иконки с количеством:", e)
 
     def add_file_to_list(self, file_path):
         if file_path == 'activate':
@@ -168,6 +200,7 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.radio_copy_stamp.setChecked(stamp_type == 1)
 
     def show_menu(self, reason=QtWidgets.QSystemTrayIcon.Trigger):
+        self.update_label_text()
         try:
             if self.dialog.isVisible():
                 self.dialog.activateWindow()
@@ -180,11 +213,10 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
                     self.dialog.show()
                     self.dialog.activateWindow()
                 else:
-                    self.showMessage(
+                    show_notification(
                         "Пусто",
                         "Документов на подпись не обнаружено.",
-                        QtWidgets.QSystemTrayIcon.Information,
-                        300  # Время отображения уведомления в миллисекундах
+                        4  # Время отображения уведомления в миллисекундах
                     )
         except:
             traceback.print_exc()
@@ -200,7 +232,7 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
                 rules = []
             for rule in rules:
                 source_dir, _, _, for_sign_dir = rule.strip().split('|')
-                print('checking dir', source_dir)
+                # print('checking dir', source_dir)
                 # Получение всех файлов в корневой директории
                 for file_name in os.listdir(source_dir):
                     if file_name in ['Thumbs.db', "desktop.ini"] or for_sign_dir == 'нет' or file_name.startswith(('gf_', '~')):
@@ -215,9 +247,9 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
                     sig_file_path = file_path + '.sig'
                     if os.path.exists(sig_file_path):
                         continue
-                    print('found file', file_path)
+                    # print('found file', file_path)
                     matching_files.append(file_path)
-            return matching_files
+            return filter_inappropriate_files(matching_files)
         except:
             traceback.print_exc()
             return []
@@ -228,24 +260,18 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.rules_dialog.activateWindow()
 
     def toggle_startup(self):
-        def create_shortcut(shortcut_path):
-            if not os.path.exists(shortcut_path):
-                from win32com.client import Dispatch
-                shell = Dispatch('WScript.Shell')
-                shortcut = shell.CreateShortCut(shortcut_path)
-                shortcut.TargetPath = sys.argv[0]
-                shortcut.WorkingDirectory = os.path.dirname(sys.argv[0])
-                shortcut.save()
+        desired_state = self.toggle_autorun.isChecked()
+        result = toggle_startup_registry(desired_state)
 
-        startup_folder = winshell.startup()
-        shortcut_path = os.path.join(startup_folder, f"DocumentSIGner.lnk")
-        if self.toggle_autorun.isChecked():
-            create_shortcut(shortcut_path)
-            config['autorun'] = True
+        if result:
+            config['autorun'] = desired_state
         else:
-            if os.path.exists(shortcut_path):
-                os.unlink(shortcut_path)
-            config['autorun'] = False
+            self.toggle_autorun.setChecked(not desired_state)
+            QtWidgets.QMessageBox.warning(
+                None,
+                "Ошибка",
+                "Не удалось изменить автозапуск. Возможно, недостаточно прав."
+            )
         save_config()
 
     def toggle_stamp(self):
@@ -269,7 +295,6 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
             else:
                 self.toggle_context_menu.setChecked(True)
         save_config()
-
 
     def toggle_notifier(self):
         if self.toggle_notify.isChecked():
@@ -296,21 +321,23 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
                 self.notifiers.append((watcher, thread))
 
     def notify_new_file(self, fp):
-        self.showMessage(
+        self.update_label_text()
+        def on_click():
+            self.show_menu('activate')
+        notifier.set_notification_callback_once(on_click)
+        show_notification(
             "Получены документы подпись.",
             f"{os.path.basename(fp)}\n(нажмите здесь, чтобы открыть меню подписи)",
-            QtWidgets.QSystemTrayIcon.Information,
-            2500  # Время отображения уведомления в миллисекундах
+            5
         )
 
     def run_socket_server(self):
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server_socket.bind(('localhost', 65432))
         server_socket.listen()
-        print('Socket server listening started')  # Лог для отладки
         while True:
             conn, addr = server_socket.accept()
-            print('Connection accepted from', addr)  # Лог для отладки
             with conn:
                 data = b''
                 while True:
@@ -319,19 +346,40 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
                         break
                     data += chunk
                 if data:
-                    file_path = data.decode()
-                    print(f"Received file path: {file_path}")
+                    received = data.decode('utf-8')
+                    paths = received.strip().splitlines()
                     from main_functions import ALLOWED_EXTENTIONS
-                    if (file_path.lower().endswith(ALLOWED_EXTENTIONS) and not file_path.startswith(('~', "gf_"))) or file_path=='activate':
-                        file_paths_queue.put(file_path)
+                    for file_path in paths:
+                        if (file_path.lower().endswith(ALLOWED_EXTENTIONS)
+                            and not os.path.basename(file_path).startswith(('~', 'gf_'))) or file_path == 'activate':
+                            file_paths_queue.put(file_path)
 
     def exit(self):
+        if hasattr(self, 'notifiers'):
+            for watcher, thread in self.notifiers:
+                if hasattr(watcher, 'observer'):
+                    watcher.observer.stop()
+                    watcher.observer.join()
+
+        if hasattr(self, 'queue_thread'):
+            file_paths_queue.put(None)  # Завершает QueueMonitorThread
+            self.queue_thread.wait()
+
+        if hasattr(self, 'socket_server_thread'):
+            # Нельзя завершить socket.accept() напрямую, но можно закрыть сокет, если сделать его self-свойством
+            try:
+                self.server_socket.close()
+            except:
+                pass
+
         if first_instance:
             lock_file.close()
         QtWidgets.QApplication.quit()
 
 
 def main():
+    QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)
+    QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
     qt_app = QtWidgets.QApplication(sys.argv)
     qt_app.setQuitOnLastWindowClosed(False)
     translator = QTranslator()
@@ -344,11 +392,10 @@ def main():
     tray_gui = SystemTrayGui(QtGui.QIcon(resource_path('icons8-legal-document-64.ico')))
     qt_app.tray_gui = tray_gui
     tray_gui.show()
-    tray_gui.showMessage(
+    show_notification(
         "Приложение запущено.",
         f"Нажмите на значок, чтобы открыть список документов на подпись",
-        QtWidgets.QSystemTrayIcon.Information,
-        1000  # Время отображения уведомления в миллисекундах
+        3  # Время отображения уведомления в секундах
     )
     sys.exit(qt_app.exec_())
 
@@ -367,6 +414,8 @@ if __name__ == '__main__':
     if not first_instance:
         if len(sys.argv) > 1:
             file_paths = sys.argv[1:]
+            print('Переданы файлы:', file_paths)
+            time.sleep(10)
             result = send_file_path_to_existing_instance(file_paths)
             if result:
                 sys.exit(0)
@@ -376,6 +425,7 @@ if __name__ == '__main__':
                 sys.exit(0)
     else:
         try:
+            remove_old_from_context_menu()
             update_updater()
         except Exception as e:
             print(e)

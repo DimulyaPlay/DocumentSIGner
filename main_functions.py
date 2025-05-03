@@ -3,18 +3,13 @@ import os
 import socket
 import shutil
 import traceback
-import msvcrt
-from errno import ECHILD
-from glob import glob
 import subprocess
 import re
 import sys
 from PIL import Image, ImageDraw, ImageFont
-import requests
 import tempfile
 import fitz
-from threading import Lock, Timer,Thread
-import base64
+from threading import Lock, Timer, Thread
 import winreg as reg
 from PySide2.QtWidgets import (QApplication, QAbstractItemView, QAction, QDialog,
                                QMenu, QVBoxLayout, QListWidget, QTableWidget,
@@ -22,16 +17,15 @@ from PySide2.QtWidgets import (QApplication, QAbstractItemView, QAction, QDialog
                                QLabel, QRadioButton, QLineEdit, QPushButton,
                                QFileDialog, QWidget, QComboBox, QCheckBox, QMessageBox,
                                QSlider, QButtonGroup, QFrame)
-from PySide2.QtCore import Qt, QThread, Signal, QRect, QSize, QLineF, QPoint
+from PySide2.QtCore import Qt, QThread, Signal, QRect, QSize, QLineF, QPoint, QTranslator, QLocale, QLibraryInfo, Slot
 from PySide2.QtGui import QIcon, QMovie, QPixmap, QPainter
 from queue import Queue
 import fnmatch
 import time
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
-import urllib3
 import zipfile
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 
 
 config_folder = config_file = os.path.join(os.path.expanduser('~/Documents'), 'DocumentSIGner')
@@ -139,6 +133,11 @@ def get_cert_data():
         return {}
 
 
+def filter_inappropriate_files(file_paths):
+    return [file_path for file_path in file_paths if
+     file_path.lower().endswith(ALLOWED_EXTENTIONS) and not os.path.basename(file_path).startswith(('~', "gf_"))]
+
+
 def sign_document(s_source_file, cert_data):
     if s_source_file:
         if os.path.exists(s_source_file):
@@ -167,6 +166,25 @@ def sign_document(s_source_file, cert_data):
         else:
             print(f"Не удается найти исходный файл [{s_source_file}].")
             return 0
+
+
+def toggle_startup_registry(enable: bool):
+    app_name = "DocumentSIGner"
+    exe_path = sys.executable if getattr(sys, 'frozen', False) else sys.argv[0]
+    key = r"Software\Microsoft\Windows\CurrentVersion\Run"
+    try:
+        with reg.OpenKey(reg.HKEY_CURRENT_USER, key, 0, reg.KEY_ALL_ACCESS) as reg_key:
+            if enable:
+                reg.SetValueEx(reg_key, app_name, 0, reg.REG_SZ, f'"{exe_path}"')
+            else:
+                try:
+                    reg.DeleteValue(reg_key, app_name)
+                except FileNotFoundError:
+                    pass
+        return True
+    except Exception as e:
+        print(f"[!] Ошибка автозапуска через реестр: {e}")
+        return False
 
 
 def check_chosen_pages(chosen_pages_string):
@@ -204,8 +222,8 @@ def get_stamp_coords_for_filepath(file_path, pages, stamp_image):
             real_width = page.rect.width
             real_height = page.rect.height
             # Коэффициенты масштабирования между «экранной» отрисовкой и реальным PDF-размером
-            page_image_w = dialog.stamp_widget.page_image.width()
-            page_image_h = dialog.stamp_widget.page_image.height()
+            page_image_w = dialog.page_frame.width()
+            page_image_h = dialog.page_frame.height()
             scale_x = real_width / page_image_w
             scale_y = real_height / page_image_h
             # Позиция штампа в координатах PDF
@@ -222,7 +240,12 @@ def get_stamp_coords_for_filepath(file_path, pages, stamp_image):
 
         doc.close()
         print(results)
-        return {file_path: results}
+        if results:
+            return {file_path: results}
+        else:
+            return None
+    else:
+        return None
 
 
 def create_stamp_image(cert_name, cert_info, stamp='regular'):
@@ -275,7 +298,8 @@ def add_text_to_stamp(cert_name, fingerprint, create_date, exp_date, stamp='regu
 
 
 def add_to_context_menu():
-    key = reg.HKEY_CLASSES_ROOT
+    # Используем HKEY_CURRENT_USER, чтобы не требовать прав администратора
+    key = reg.HKEY_CURRENT_USER
     key_path = r'*\shell\DocumentSIGner'
     command_key_path = r'*\shell\DocumentSIGner\command'
     multi_select_key_path = r'*\shell\DocumentSIGner\DropTarget\Command'
@@ -290,39 +314,53 @@ def add_to_context_menu():
         reg.SetValue(key, multi_select_key_path, reg.REG_SZ, exe_path_many)  # Set the command for multiple files
         return 1
     except Exception as e:
-        QMessageBox.warning(None, 'Ошибка',
-                            "Не удалось изменить параметры реестра, программа должна запускаться от имени администратора")
+        traceback.print_exc()
+        QMessageBox.warning(None, 'Ошибка', "Не удалось изменить параметры реестра.")
         return 0
 
 
 def remove_from_context_menu():
+    key = reg.HKEY_CURRENT_USER
+    key_path = r'*\shell\DocumentSIGner'
+    try:
+        open_key = reg.OpenKey(key, key_path, 0, reg.KEY_ALL_ACCESS)
+        num_subkeys, num_values, last_modified = reg.QueryInfoKey(open_key)
+        for i in range(num_subkeys):
+            subkey = reg.EnumKey(open_key, 0)
+            delete_registry_key(open_key, subkey)
+        reg.CloseKey(open_key)
+        reg.DeleteKey(key, key_path)
+        return 1
+    except Exception as e:
+        traceback.print_exc()
+        QMessageBox.warning(None, 'Ошибка', "Не удалось изменить параметры реестра.")
+        return 0
+
+
+def remove_old_from_context_menu():
     key = reg.HKEY_CLASSES_ROOT
     key_path = r'*\shell\DocumentSIGner'
     try:
         open_key = reg.OpenKey(key, key_path, 0, reg.KEY_ALL_ACCESS)
         num_subkeys, num_values, last_modified = reg.QueryInfoKey(open_key)
-
         for i in range(num_subkeys):
             subkey = reg.EnumKey(open_key, 0)
             delete_registry_key(open_key, subkey)
-
         reg.CloseKey(open_key)
         reg.DeleteKey(key, key_path)
-        return 1
-    except Exception as e:
-        QMessageBox.warning(None, 'Ошибка', "Не удалось изменить параметры реестра, программа должна запускаться от имени администратора")
+        return 1  # Успех
+    except FileNotFoundError:
         return 0
-
+    except Exception as e:
+        return 0
 
 def delete_registry_key(key, key_path):
     try:
         open_key = reg.OpenKey(key, key_path, 0, reg.KEY_ALL_ACCESS)
         num_subkeys, num_values, last_modified = reg.QueryInfoKey(open_key)
-
         for i in range(num_subkeys):
             subkey = reg.EnumKey(open_key, 0)
             delete_registry_key(open_key, subkey)
-
         reg.CloseKey(open_key)
         reg.DeleteKey(key, key_path)
     except FileNotFoundError:
@@ -556,10 +594,11 @@ class CustomListWidgetItem(QWidget):
 
 
 class FileDialog(QDialog):
-    def __init__(self, file_paths):
+    def __init__(self, file_paths, tray_gui=None):
         super().__init__()
         self.current_session_stamps = None
         self.certs_data = get_cert_data()
+        self.tray_gui = tray_gui
         self.setWindowIcon(QIcon(resource_path('icons8-legal-document-64.ico')))
         self.certs_list = list(self.certs_data.keys())
         self.setWindowTitle("Подписание файлов")
@@ -681,7 +720,11 @@ class FileDialog(QDialog):
                                                  self.certs_data[self.certificate_comboBox.currentText()], stamp)
                 if file_path and pages:
                     file_path_coords = get_stamp_coords_for_filepath(file_path, pages, stamp_image)
-                    self.current_session_stamps.update(file_path_coords)
+                    if file_path_coords and file_path_coords.get(file_path):  # убедимся, что есть хоть одна страница
+                        self.current_session_stamps.update(file_path_coords)
+                    else:
+                        # Отметим, что штамп не должен ставиться вообще
+                        self.current_session_stamps[file_path] = None
 
     def get_file_indexes_for_sign(self, all=False):
         if all:
@@ -698,6 +741,7 @@ class FileDialog(QDialog):
     def sign_all(self):
         self.current_session_stamps = {}
         self.block_buttons(True)
+        self.loading_label.show()
         self.loading_label.setMovie(self.movie)
         self.movie.start()
         if config.get('stamp_place', 0) == 1:
@@ -710,12 +754,13 @@ class FileDialog(QDialog):
     def sign_chosen(self):
         self.current_session_stamps = {}
         files_to_sign = self.get_file_indexes_for_sign()
+        self.block_buttons(True)
+        self.loading_label.show()
+        self.loading_label.setMovie(self.movie)
+        self.movie.start()
         if config.get('stamp_place', 0) == 1:
             self.request_stamp_positions_from_user(files_to_sign)
         if files_to_sign:
-            self.block_buttons(True)
-            self.loading_label.setMovie(self.movie)
-            self.movie.start()
             self.thread = SignAllFilesThread(self, files_to_sign)
             self.thread.result.connect(self.on_sign_all_result)
             self.thread.start()
@@ -741,6 +786,8 @@ class FileDialog(QDialog):
                 QMessageBox.warning(self, 'Ошибка', f'Возникли ошибки со следующими документами:\n{msg_str}')
             else:
                 QMessageBox.information(self, 'Успех', 'Создание подписи завершено.')
+            if self.tray_gui:
+                self.tray_gui.update_label_text()
         except:
             traceback.print_exc()
 
@@ -782,7 +829,7 @@ class FileDialog(QDialog):
             print(f"Файл: {file_path}, Страницы: {pages}")
             custom_coords = self.current_session_stamps.get(file_path)
             backup_file = shutil.copy(file_path, file_path + '_bkp')
-            if file_path.lower().endswith('.pdf') and (pages or custom_coords):
+            if file_path.lower().endswith('.pdf') and custom_coords is not None and (pages or custom_coords):
                 stamp_image_path = create_stamp_image(self.certificate_comboBox.currentText(), self.certs_data[self.certificate_comboBox.currentText()], stamp)
                 if not self.sign_original.isChecked():
                     filepath_to_stamp = os.path.join(os.path.dirname(file_path),
@@ -826,18 +873,14 @@ class FileDialog(QDialog):
         return 0, '', file_path
 
     def append_new_file_to_list(self, file_path):
-        fn = os.path.basename(file_path)
-        if file_path.lower().endswith(ALLOWED_EXTENTIONS) and not fn.startswith(('~', "gf_")):
-            item = QListWidgetItem(self.file_list)
-            widget = CustomListWidgetItem(file_path)
-            item.setSizeHint(widget.sizeHint())
-            if self.width() < widget.sizeHint().width() + 35:
-                self.setFixedWidth(widget.sizeHint().width() + 35)
-            self.file_list.setItemWidget(item, widget)
-            print(file_path, "добавлен в список")
-            return 1
-        else:
-            return 0
+        item = QListWidgetItem(self.file_list)
+        widget = CustomListWidgetItem(file_path)
+        item.setSizeHint(widget.sizeHint())
+        if self.width() < widget.sizeHint().width() + 35:
+            self.setFixedWidth(widget.sizeHint().width() + 35)
+        self.file_list.setItemWidget(item, widget)
+        print(file_path, "добавлен в список")
+        return 1
 
     def closeEvent(self, event):
         self.file_list.clear()
@@ -962,20 +1005,14 @@ def send_file_path_to_existing_instance(file_paths):
     attempts = 5
     for attempt in range(attempts):
         try:
-            print(f'Attempt {attempt + 1} to send file paths to existing instance...')  # Лог для отладки
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client_socket.connect(('localhost', 65432))
-            print('Connected to the socket server')  # Лог для отладки
-            data = file_paths[0]
-            client_socket.sendall(data.encode())
+            data = '\n'.join(file_paths)  # 🔄 теперь это список строк, включая пути с пробелами
+            client_socket.sendall(data.encode('utf-8'))
             client_socket.close()
-            print('File paths sent successfully and connection closed')  # Лог для отладки
             return 1
         except ConnectionRefusedError:
-            print('Connection to the socket server failed')  # Лог для отладки
-            if attempt < attempts - 1:
-                print('Retrying in 1 second...')  # Лог для отладки
-                time.sleep(1)
+            time.sleep(1)
     return 0
 
 
@@ -1066,7 +1103,6 @@ class FileWatchHandler(FileSystemEventHandler):
                 self.notify_callback(f"{len(self.new_files)} новых файлов")
             self.new_files.clear()
             self.notification_timer = None
-
 
 
 class FileWatcher:
