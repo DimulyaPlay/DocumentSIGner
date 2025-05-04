@@ -6,10 +6,11 @@ import traceback
 import subprocess
 import re
 import sys
-from PIL import Image, ImageDraw, ImageFont
+import pypdfium2 as pdfium
 import tempfile
-import fitz
+from PyPDF2 import PdfReader, PdfWriter
 from threading import Lock, Timer, Thread
+from reportlab.pdfgen import canvas
 import winreg as reg
 from PySide2.QtWidgets import (QApplication, QAbstractItemView, QAction, QDialog,
                                QMenu, QVBoxLayout, QListWidget, QTableWidget,
@@ -19,6 +20,8 @@ from PySide2.QtWidgets import (QApplication, QAbstractItemView, QAction, QDialog
                                QSlider, QButtonGroup, QFrame)
 from PySide2.QtCore import Qt, QThread, Signal, QRect, QSize, QLineF, QPoint, QTranslator, QLocale, QLibraryInfo, Slot
 from PySide2.QtGui import QIcon, QMovie, QPixmap, QPainter
+from PIL import Image, ImageDraw, ImageFont
+from PIL.ImageQt import ImageQt
 from queue import Queue
 import fnmatch
 import time
@@ -213,14 +216,14 @@ def get_stamp_coords_for_filepath(file_path, pages, stamp_image):
     dialog = PlaceImageStampOnA4(file_path, pages, stamp_image)
     if dialog.exec_() == QDialog.Accepted:
         results = {}
-        doc = fitz.open(file_path)
+        pdf_reader = PdfReader(file_path)
         # Берём все данные, сохранённые в диалоге
         dialog_data = dialog.get_results()[file_path]
         print(dialog_data)
         for page_idx, data in dialog_data.items():
-            page = doc[page_idx]
-            real_width = page.rect.width
-            real_height = page.rect.height
+            page = pdf_reader.pages[page_idx]
+            real_width = float(page.mediabox.width)
+            real_height = float(page.mediabox.height)
             # Коэффициенты масштабирования между «экранной» отрисовкой и реальным PDF-размером
             page_image_w = dialog.page_frame.width()
             page_image_h = dialog.page_frame.height()
@@ -237,9 +240,7 @@ def get_stamp_coords_for_filepath(file_path, pages, stamp_image):
             w = disp_stamp_w * scale_x
             h = disp_stamp_h * scale_y
             results[page_idx] = (x, y, x + w, y + h)
-
-        doc.close()
-        print(results)
+        pdf_reader.stream.close()  # безопасное закрытие файла
         if results:
             return {file_path: results}
         else:
@@ -372,41 +373,58 @@ def delete_registry_key(key, key_path):
 
 
 def add_stamp(pdf_path, stamp_path, pagelist, custom_coords=None):
+
+    def create_overlay_pdf_with_stamp(image_path, page_width, page_height, coords):
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".pdf")
+        os.close(tmp_fd)
+        c = canvas.Canvas(tmp_path, pagesize=(page_width, page_height))
+        x0, y0, x1, y1 = coords
+        width = x1 - x0
+        height = y1 - y0
+        y_rl = page_height - y1  # корректируем Y для ReportLab (0 внизу)
+        c.drawImage(image_path, x0, y_rl, width=width, height=height, mask='auto')
+        c.showPage()
+        c.save()
+        return tmp_path
+
     try:
-        doc = fitz.open(pdf_path)
-        img_stamp = fitz.Pixmap(stamp_path)  # Загружаем изображение
-        metadata = doc.metadata
-        # Проверка, был ли документ создан с помощью "Microsoft: Print To PDF"
-        is_microsoft_pdf = 'Microsoft: Print To PDF' in (metadata.get('producer', '') + metadata.get('creator', ''))
-        print('Добавление штампа на страницы', pagelist)
-        if pagelist and not custom_coords:
-            if pagelist == 'all':
-                pagelist = range(len(doc))
-            for page_index in pagelist:
-                if page_index == -1:
-                    page_index = len(doc)-1
-                if is_microsoft_pdf:
-                    doc[page_index].clean_contents()
-                img_width, img_height = img_stamp.width / 4.5, img_stamp.height / 4.5
-                page_width = doc[page_index].rect.width
-                page_height = doc[page_index].rect.height
-                x0 = (page_width / 2) - (img_width / 2)
-                y0 = page_height-img_height-25
-                x1 = x0 + img_width
-                y1 = y0 + img_height
-                img_rect = fitz.Rect(x0, y0, x1, y1)
-                doc[page_index].insert_image(img_rect, pixmap=img_stamp)
-                print('Стандартный штамп создан', page_index, img_rect)
-        if custom_coords:
-            for page_index, coords in custom_coords.items():
-                doc[page_index].insert_image(coords, pixmap=img_stamp)
-                print('Кастомный штамп создан', page_index, coords)
-        temp_path = pdf_path + ".tmp"
-        doc.save(temp_path, deflate=True)
-        doc.close()
-        os.replace(temp_path, pdf_path)
-    except:
-        print('Не удалось добавить штамп на', pdf_path)
+        reader = PdfReader(pdf_path)
+        writer = PdfWriter()
+        total_pages = len(reader.pages)
+        if pagelist == 'all':
+            pages_to_stamp = list(range(total_pages))
+        else:
+            pages_to_stamp = [(total_pages - 1 if p == -1 else p) for p in pagelist]
+        print('Добавление штампа на страницы', pages_to_stamp)
+        for idx, page in enumerate(reader.pages):
+            if custom_coords and idx in custom_coords:
+                coords = custom_coords[idx]
+            elif idx in pages_to_stamp:
+                page_width = float(page.mediabox.width)
+                page_height = float(page.mediabox.height)
+                img = Image.open(stamp_path)
+                img_width = img.width / 4.5
+                img_height = img.height / 4.5
+                x0 = (page_width - img_width) / 2
+                y0 = page_height - img_height - 25
+                coords = (x0, y0, x0 + img_width, y0 + img_height)
+            else:
+                writer.add_page(page)
+                continue
+            page_width = float(page.mediabox.width)
+            page_height = float(page.mediabox.height)
+            overlay_path = create_overlay_pdf_with_stamp(stamp_path, page_width, page_height, coords)
+            overlay_reader = PdfReader(overlay_path)
+            page.merge_page(overlay_reader.pages[0])
+            os.remove(overlay_path)
+            writer.add_page(page)
+        temp_out = pdf_path + '.tmp'
+        with open(temp_out, 'wb') as f_out:
+            writer.write(f_out)
+        reader.stream.close()
+        os.replace(temp_out, pdf_path)
+    except Exception as e:
+        print(f"[!] Не удалось вставить штамп в {pdf_path}: {e}")
         traceback.print_exc()
     return pdf_path
 

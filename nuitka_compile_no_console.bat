@@ -8,6 +8,8 @@
   --include-module=stamp_editor ^
   --include-module=main_functions ^
   --include-module=notifications ^
+  --nofollow-import-to=reportlab.graphics.testshapes ^
+  --noinclude-unittest-mode=error ^
   --windows-icon-from-ico=icons8-legal-document-64.ico ^
   --include-data-files=icons8-legal-document-64.ico=./ ^
   --include-data-files=Update.exe=./ ^

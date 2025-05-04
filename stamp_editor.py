@@ -6,8 +6,8 @@ class PlaceImageStampOnA4(QDialog):
         super().__init__()
         self.file_path = file_path
         self.stamp_image_path = stamp_image_path
-        self.doc = fitz.open(file_path)
-
+        self.pdf_document = pdfium.PdfDocument(file_path)
+        self.total_pages = len(self.pdf_document)
         self.pages = self.parse_pages(pages)
         # Определяем режим: одна страница или несколько
         self.mode = 'single' if len(self.pages) == 1 else 'multi'
@@ -33,21 +33,11 @@ class PlaceImageStampOnA4(QDialog):
     def parse_pages(self, pages):
         """Обработка входного параметра pages: может быть 'all', список, кортеж или число."""
         if pages == 'all':
-            return list(range(len(self.doc)))
+            return list(range(self.total_pages))
         elif isinstance(pages, (list, tuple)):
-            parsed_pages = []
-            for page in pages:
-                if page == -1:
-                    parsed_pages.append(len(self.doc) - 1)
-                else:
-                    parsed_pages.append(page)
-            return parsed_pages
+            return [p if p != -1 else self.total_pages - 1 for p in pages]
         else:
-            # Если pages – одиночное число
-            if pages == -1:
-                return [len(self.doc) - 1]
-            else:
-                return [pages]
+            return [pages if pages != -1 else self.total_pages - 1]
 
     def initUI(self):
         self.setWindowTitle('Переместите штамп на нужное место')
@@ -117,26 +107,20 @@ class PlaceImageStampOnA4(QDialog):
             self.load_page(self.pages[self.current_process_idx])
 
     def load_page(self, page_idx):
-        """Загружает в виджет указанную страницу документа (в уменьшенном/увеличенном виде)."""
-        page = self.doc.load_page(page_idx)
-        pix = page.get_pixmap(dpi=150)
+        """Загружает страницу PDF через pypdfium2 и отображает в виджете."""
+        self.cleanup()
+        page = self.pdf_document[page_idx]
+        bitmap = page.render(scale=1.5)  # ~150dpi
+        image = bitmap.to_pil()
         temp_path = f"temp_page_{page_idx}.png"
-        pix.save(temp_path)
+        image.save(temp_path)
         self.temp_files.append(temp_path)
-
-        # Определяем «стандартный» размер страницы A4-ish с учётом ориентации
-        if page.rect.width > page.rect.height:
-            page_size = QSize(790, 557)  # Альбомная
+        if image.width > image.height:
+            page_size = QSize(790, 557)
         else:
-            page_size = QSize(557, 790)  # Портретная
-
-        # Если мы уже что-то сохранили для этой страницы, подставим:
+            page_size = QSize(557, 790)
         saved_state = self.results.get(page_idx, None)
-
-        # Передаём полученную картинку и размер в ImageStampWidget
-        self.stamp_widget.set_page(QPixmap(temp_path), page_size, saved_state)
-
-        # Ограничиваем размер только page_frame, а не всего диалога
+        self.stamp_widget.set_page(QPixmap.fromImage(temp_path), page_size, saved_state)
         self.page_frame.setFixedSize(page_size)
 
     # ---------------------- МНОГОСТРАНИЧНЫЙ РЕЖИМ ----------------------
@@ -210,7 +194,7 @@ class PlaceImageStampOnA4(QDialog):
     def next_page(self):
         """Переключение на следующую страницу (только в режиме single). Ничего не сохраняем."""
         if self.mode == 'single':
-            new_page = min(len(self.doc) - 1, self.current_doc_page + 1)
+            new_page = min(self.total_pages - 1, self.current_doc_page + 1)
             if new_page != self.current_doc_page:
                 self.current_doc_page = new_page
                 self.load_page(new_page)
@@ -237,7 +221,6 @@ class PlaceImageStampOnA4(QDialog):
         for f in self.temp_files:
             if os.path.exists(f):
                 os.remove(f)
-        self.doc.close()
 
     def accept(self):
         self.cleanup()
