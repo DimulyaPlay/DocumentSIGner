@@ -4,15 +4,14 @@ from threading import Thread, Lock
 from PySide2.QtCore import QTranslator, QLocale, QLibraryInfo
 from PySide2 import QtWidgets, QtGui, QtCore
 import socket
-from main_functions import resource_path, remove_old_from_context_menu, toggle_startup_registry, filter_inappropriate_files, config_folder, update_updater, FileWatcher, add_to_context_menu, remove_from_context_menu, RulesDialog, config, save_config, send_file_path_to_existing_instance, file_paths_queue, QueueMonitorThread, FileDialog, handle_dropped_files
+from main_functions import resource_path, toggle_startup_registry, filter_inappropriate_files, config_folder, update_updater, FileWatcher, add_to_context_menu, remove_from_context_menu, RulesDialog, config, save_config, send_file_path_to_existing_instance, file_paths_queue, QueueMonitorThread, FileDialog, handle_dropped_files
 import msvcrt
 import os
 import traceback
-from notifications import show_notification, notifier
 
-# .venv\Scripts\pyinstaller.exe --windowed --noconfirm --icon "icons8-legal-document-64.ico" --add-data "icons8-legal-document-64.ico;." --add-data "Update.exe;." --add-data "Update.cfg;." --add-data "dcs.png;." --add-data "dcs-copy-in-law.png;." --add-data "dcs-copy-no-in-law.png;." documentSIGner.py
+# .venv\Scripts\pyinstaller.exe --windowed --noconfirm --contents-directory "." --icon "icons8-legal-document-64.ico" --add-data "icons8-legal-document-64.ico;." --add-data "35.gif;." --add-data "Update.exe;." --add-data "Update.cfg;." --add-data "dcs.png;." --add-data "dcs-copy-in-law.png;." --add-data "dcs-copy-no-in-law.png;." documentSIGner.py
 
-version = 'Версия 2.5 Сборка 010520251'
+version = 'Версия 2.6 Сборка 060520251'
 
 
 def exception_hook(exc_type, exc_value, exc_traceback):
@@ -213,10 +212,11 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
                     self.dialog.show()
                     self.dialog.activateWindow()
                 else:
-                    show_notification(
+                    self.showMessage(
                         "Пусто",
                         "Документов на подпись не обнаружено.",
-                        4  # Время отображения уведомления в миллисекундах
+                        QtWidgets.QSystemTrayIcon.Information,
+                        300  # Время отображения уведомления в миллисекундах
                     )
         except:
             traceback.print_exc()
@@ -321,14 +321,11 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
                 self.notifiers.append((watcher, thread))
 
     def notify_new_file(self, fp):
-        self.update_label_text()
-        def on_click():
-            self.show_menu('activate')
-        notifier.set_notification_callback_once(on_click)
-        show_notification(
+        self.showMessage(
             "Получены документы подпись.",
             f"{os.path.basename(fp)}\n(нажмите здесь, чтобы открыть меню подписи)",
-            5
+            QtWidgets.QSystemTrayIcon.Information,
+            2500  # Время отображения уведомления в миллисекундах
         )
 
     def run_socket_server(self):
@@ -392,10 +389,11 @@ def main():
     tray_gui = SystemTrayGui(QtGui.QIcon(resource_path('icons8-legal-document-64.ico')))
     qt_app.tray_gui = tray_gui
     tray_gui.show()
-    show_notification(
+    tray_gui.showMessage(
         "Приложение запущено.",
         f"Нажмите на значок, чтобы открыть список документов на подпись",
-        3  # Время отображения уведомления в секундах
+        QtWidgets.QSystemTrayIcon.Information,
+        1000  # Время отображения уведомления в миллисекундах
     )
     sys.exit(qt_app.exec_())
 
@@ -415,7 +413,6 @@ if __name__ == '__main__':
         if len(sys.argv) > 1:
             file_paths = sys.argv[1:]
             print('Переданы файлы:', file_paths)
-            time.sleep(10)
             result = send_file_path_to_existing_instance(file_paths)
             if result:
                 sys.exit(0)
@@ -425,7 +422,6 @@ if __name__ == '__main__':
                 sys.exit(0)
     else:
         try:
-            remove_old_from_context_menu()
             update_updater()
         except Exception as e:
             print(e)

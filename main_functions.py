@@ -21,15 +21,12 @@ from PySide2.QtWidgets import (QApplication, QAbstractItemView, QAction, QDialog
 from PySide2.QtCore import Qt, QThread, Signal, QRect, QSize, QLineF, QPoint, QTranslator, QLocale, QLibraryInfo, Slot
 from PySide2.QtGui import QIcon, QMovie, QPixmap, QPainter
 from PIL import Image, ImageDraw, ImageFont
-from PIL.ImageQt import ImageQt
 from queue import Queue
 import fnmatch
 import time
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import zipfile
-
-
 
 config_folder = config_file = os.path.join(os.path.expanduser('~/Documents'), 'DocumentSIGner')
 if not os.path.exists(config_folder):
@@ -55,7 +52,9 @@ serial_names = ('Серийный номер', 'Serial')
 sha1 = ('SHA1 отпечаток', 'SHA1 Hash')
 date_make = ('Выдан', 'Not valid before')
 date_exp = ('Истекает', 'Not valid after')
-
+if getattr(sys, 'frozen', False) or '__compiled__' in globals():
+    sys.stdout = open('console_output.log', 'a', buffering=1)
+    sys.stderr = open('console_errors.log', 'a', buffering=1)
 
 def read_create_config(config_path):
     default_configuration = {
@@ -165,6 +164,7 @@ def sign_document(s_source_file, cert_data):
             elif os.path.isfile(f"{s_source_file}.sig"):
                 return f"{s_source_file}.sig"
             else:
+                print(result)
                 return 0
         else:
             print(f"Не удается найти исходный файл [{s_source_file}].")
@@ -214,6 +214,7 @@ def check_chosen_pages(chosen_pages_string):
 def get_stamp_coords_for_filepath(file_path, pages, stamp_image):
     from stamp_editor import PlaceImageStampOnA4
     dialog = PlaceImageStampOnA4(file_path, pages, stamp_image)
+    dialog.pdf_document.close()
     if dialog.exec_() == QDialog.Accepted:
         results = {}
         pdf_reader = PdfReader(file_path)
@@ -299,77 +300,39 @@ def add_text_to_stamp(cert_name, fingerprint, create_date, exp_date, stamp='regu
 
 
 def add_to_context_menu():
-    # Используем HKEY_CURRENT_USER, чтобы не требовать прав администратора
-    key = reg.HKEY_CURRENT_USER
-    key_path = r'*\shell\DocumentSIGner'
-    command_key_path = r'*\shell\DocumentSIGner\command'
-    multi_select_key_path = r'*\shell\DocumentSIGner\DropTarget\Command'
-    exe_path_one = f'\"{os.path.abspath(sys.argv[0])}\" \"%1\"'
-    exe_path_many = f'\"{os.path.abspath(sys.argv[0])}\" \"%*\"'
+    key_base = r'Software\Classes\*\shell\DocumentSIGner'
+    command_key = key_base + r'\command'
     try:
-        reg.CreateKey(key, key_path)
-        reg.CreateKey(key, command_key_path)
-        reg.CreateKey(key, multi_select_key_path)  # Create the DropTarget\Command key
-        reg.SetValue(key, key_path, reg.REG_SZ, "Подписать с помощью DocumentSIGner")
-        reg.SetValue(key, command_key_path, reg.REG_SZ, exe_path_one)
-        reg.SetValue(key, multi_select_key_path, reg.REG_SZ, exe_path_many)  # Set the command for multiple files
+        with reg.CreateKey(reg.HKEY_CURRENT_USER, key_base) as key:
+            reg.SetValueEx(key, '', 0, reg.REG_SZ, 'Подписать с помощью DocumentSIGner')
+        with reg.CreateKey(reg.HKEY_CURRENT_USER, command_key) as key:
+            exe_path = f'"{os.path.abspath(sys.argv[0])}" "%1"'
+            reg.SetValueEx(key, '', 0, reg.REG_SZ, exe_path)
         return 1
-    except Exception as e:
+    except Exception:
         traceback.print_exc()
         QMessageBox.warning(None, 'Ошибка', "Не удалось изменить параметры реестра.")
         return 0
 
 
 def remove_from_context_menu():
-    key = reg.HKEY_CURRENT_USER
-    key_path = r'*\shell\DocumentSIGner'
     try:
-        open_key = reg.OpenKey(key, key_path, 0, reg.KEY_ALL_ACCESS)
-        num_subkeys, num_values, last_modified = reg.QueryInfoKey(open_key)
-        for i in range(num_subkeys):
-            subkey = reg.EnumKey(open_key, 0)
-            delete_registry_key(open_key, subkey)
-        reg.CloseKey(open_key)
-        reg.DeleteKey(key, key_path)
+        key_path = r'*\shell\DocumentSIGner'
+        reg.DeleteKey(reg.HKEY_CLASSES_ROOT, key_path + r'\command')
+        reg.DeleteKey(reg.HKEY_CLASSES_ROOT, key_path)
+    except:
+        pass
+    base_path = r'Software\Classes\*\shell\DocumentSIGner'
+    try:
+        reg.DeleteKey(reg.HKEY_CURRENT_USER, base_path + r'\command')
+        reg.DeleteKey(reg.HKEY_CURRENT_USER, base_path)
         return 1
-    except Exception as e:
+    except FileNotFoundError:
+        return 1
+    except Exception:
         traceback.print_exc()
-        QMessageBox.warning(None, 'Ошибка', "Не удалось изменить параметры реестра.")
+        QMessageBox.warning(None, 'Ошибка', "Не удалось удалить пункт из контекстного меню.")
         return 0
-
-
-def remove_old_from_context_menu():
-    key = reg.HKEY_CLASSES_ROOT
-    key_path = r'*\shell\DocumentSIGner'
-    try:
-        open_key = reg.OpenKey(key, key_path, 0, reg.KEY_ALL_ACCESS)
-        num_subkeys, num_values, last_modified = reg.QueryInfoKey(open_key)
-        for i in range(num_subkeys):
-            subkey = reg.EnumKey(open_key, 0)
-            delete_registry_key(open_key, subkey)
-        reg.CloseKey(open_key)
-        reg.DeleteKey(key, key_path)
-        return 1  # Успех
-    except FileNotFoundError:
-        return 0
-    except Exception as e:
-        return 0
-
-def delete_registry_key(key, key_path):
-    try:
-        open_key = reg.OpenKey(key, key_path, 0, reg.KEY_ALL_ACCESS)
-        num_subkeys, num_values, last_modified = reg.QueryInfoKey(open_key)
-        for i in range(num_subkeys):
-            subkey = reg.EnumKey(open_key, 0)
-            delete_registry_key(open_key, subkey)
-        reg.CloseKey(open_key)
-        reg.DeleteKey(key, key_path)
-    except FileNotFoundError:
-        pass  # Ключ не найден, ничего не делаем
-    except PermissionError as e:
-        print(f"Permission error: {e}")
-    except Exception as e:
-        print(f"Failed to delete registry key: {e}")
 
 
 def add_stamp(pdf_path, stamp_path, pagelist, custom_coords=None):
@@ -418,10 +381,12 @@ def add_stamp(pdf_path, stamp_path, pagelist, custom_coords=None):
             page.merge_page(overlay_reader.pages[0])
             os.remove(overlay_path)
             writer.add_page(page)
+            overlay_reader.stream.close()
         temp_out = pdf_path + '.tmp'
         with open(temp_out, 'wb') as f_out:
             writer.write(f_out)
         reader.stream.close()
+        writer.close()
         os.replace(temp_out, pdf_path)
     except Exception as e:
         print(f"[!] Не удалось вставить штамп в {pdf_path}: {e}")
