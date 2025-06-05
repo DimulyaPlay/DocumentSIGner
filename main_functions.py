@@ -52,9 +52,7 @@ serial_names = ('Серийный номер', 'Serial')
 sha1 = ('SHA1 отпечаток', 'SHA1 Hash')
 date_make = ('Выдан', 'Not valid before')
 date_exp = ('Истекает', 'Not valid after')
-if getattr(sys, 'frozen', False) or '__compiled__' in globals():
-    sys.stdout = open('console_output.log', 'a', buffering=1)
-    sys.stderr = open('console_errors.log', 'a', buffering=1)
+
 
 def read_create_config(config_path):
     default_configuration = {
@@ -214,14 +212,16 @@ def check_chosen_pages(chosen_pages_string):
 def get_stamp_coords_for_filepath(file_path, pages, stamp_image):
     from stamp_editor import PlaceImageStampOnA4
     dialog = PlaceImageStampOnA4(file_path, pages, stamp_image)
-    dialog.pdf_document.close()
     if dialog.exec_() == QDialog.Accepted:
+        dialog.pdf_document.close()
         results = {}
         pdf_reader = PdfReader(file_path)
         # Берём все данные, сохранённые в диалоге
         dialog_data = dialog.get_results()[file_path]
         print(dialog_data)
         for page_idx, data in dialog_data.items():
+            if data is None:
+                results[page_idx] = None
             page = pdf_reader.pages[page_idx]
             real_width = float(page.mediabox.width)
             real_height = float(page.mediabox.height)
@@ -243,10 +243,12 @@ def get_stamp_coords_for_filepath(file_path, pages, stamp_image):
             results[page_idx] = (x, y, x + w, y + h)
         pdf_reader.stream.close()  # безопасное закрытие файла
         if results:
+            print(results)
             return {file_path: results}
         else:
             return None
     else:
+        dialog.pdf_document.close()
         return None
 
 
@@ -335,7 +337,7 @@ def remove_from_context_menu():
         return 0
 
 
-def add_stamp(pdf_path, stamp_path, pagelist, custom_coords=None):
+def add_stamp(pdf_path, stamp_path, pagelist, custom_coords={}):
 
     def create_overlay_pdf_with_stamp(image_path, page_width, page_height, coords):
         tmp_fd, tmp_path = tempfile.mkstemp(suffix=".pdf")
@@ -358,10 +360,15 @@ def add_stamp(pdf_path, stamp_path, pagelist, custom_coords=None):
             pages_to_stamp = list(range(total_pages))
         else:
             pages_to_stamp = [(total_pages - 1 if p == -1 else p) for p in pagelist]
+        if custom_coords or config.get('stamp_place', 0) == 1:
+            pages_to_stamp = [k for k in custom_coords.keys()]
         print('Добавление штампа на страницы', pages_to_stamp)
         for idx, page in enumerate(reader.pages):
             if custom_coords and idx in custom_coords:
                 coords = custom_coords[idx]
+                if coords is None:
+                    writer.add_page(page)
+                    continue
             elif idx in pages_to_stamp:
                 page_width = float(page.mediabox.width)
                 page_height = float(page.mediabox.height)
@@ -519,7 +526,7 @@ class CustomListWidgetItem(QWidget):
         self.date_input = QLineEdit()
         self.date_input.setPlaceholderText("Вступил(дд.мм.гггг)")
         self.date_input.setFixedWidth(115)
-        self.custom_pages.textEdited.connect(lambda: self.radio_verified_in_law.setChecked(True))
+        self.date_input.textEdited.connect(lambda: self.radio_verified_in_law.setChecked(True))
         self.parse_file_name_for_pages_and_stamps()
         bottom_radio_layout.addWidget(self.date_input)
         if config.get('default_stamp_type', 0) != 2:
@@ -554,7 +561,7 @@ class CustomListWidgetItem(QWidget):
             self.radio_custom.setChecked(True)
 
         # Извлечение вида штампа и даты
-        if "копия" in os.path.basename(self.file_path_orig):
+        if "копия" in os.path.basename(self.file_path_orig.lower()):
             if match := re.search(r'копия-(\d{2}\.\d{2}\.\d{4})', os.path.basename(self.file_path)):
                 self.stamp_date = match.group(1).split('-', 1)[-1]
                 self.radio_verified_in_law.setChecked(True)
@@ -579,7 +586,7 @@ class CustomListWidgetItem(QWidget):
 class FileDialog(QDialog):
     def __init__(self, file_paths, tray_gui=None):
         super().__init__()
-        self.current_session_stamps = None
+        self.current_session_stamps = {}
         self.certs_data = get_cert_data()
         self.tray_gui = tray_gui
         self.setWindowIcon(QIcon(resource_path('icons8-legal-document-64.ico')))
@@ -706,7 +713,6 @@ class FileDialog(QDialog):
                     if file_path_coords and file_path_coords.get(file_path):  # убедимся, что есть хоть одна страница
                         self.current_session_stamps.update(file_path_coords)
                     else:
-                        # Отметим, что штамп не должен ставиться вообще
                         self.current_session_stamps[file_path] = None
 
     def get_file_indexes_for_sign(self, all=False):
@@ -749,6 +755,9 @@ class FileDialog(QDialog):
             self.thread.start()
         else:
             QMessageBox.information(self, 'Ничего не выбрано', 'Выберите документы для подписи.')
+            self.movie.stop()
+            self.loading_label.clear()
+            self.block_buttons(False)
 
     def on_sign_all_result(self, fuckuped_files, index_list_red, index_list_green):
         try:
@@ -812,7 +821,7 @@ class FileDialog(QDialog):
             print(f"Файл: {file_path}, Страницы: {pages}")
             custom_coords = self.current_session_stamps.get(file_path)
             backup_file = shutil.copy(file_path, file_path + '_bkp')
-            if file_path.lower().endswith('.pdf') and custom_coords is not None and (pages or custom_coords):
+            if file_path.lower().endswith('.pdf') and (pages or custom_coords):
                 stamp_image_path = create_stamp_image(self.certificate_comboBox.currentText(), self.certs_data[self.certificate_comboBox.currentText()], stamp)
                 if not self.sign_original.isChecked():
                     filepath_to_stamp = os.path.join(os.path.dirname(file_path),

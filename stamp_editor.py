@@ -108,7 +108,7 @@ class PlaceImageStampOnA4(QDialog):
 
     def load_page(self, page_idx):
         """Загружает страницу PDF через pypdfium2 и отображает в виджете."""
-        self.cleanup()
+        print("requested render page:", page_idx)
         page = self.pdf_document[page_idx]
         bitmap = page.render(scale=1.5)  # ~150dpi
         image = bitmap.to_pil()
@@ -116,9 +116,9 @@ class PlaceImageStampOnA4(QDialog):
         image.save(temp_path)
         self.temp_files.append(temp_path)
         if image.width > image.height:
-            page_size = QSize(790, 557)
+            page_size = QSize(770, 543)
         else:
-            page_size = QSize(557, 790)
+            page_size = QSize(543, 770)
         saved_state = self.results.get(page_idx, None)
         self.stamp_widget.set_page(QPixmap.fromImage(temp_path), page_size, saved_state)
         self.page_frame.setFixedSize(page_size)
@@ -160,7 +160,7 @@ class PlaceImageStampOnA4(QDialog):
             # Многостраничный режим: исключаем текущую страницу из результатов
             current_page = self.pages[self.current_process_idx]
             if current_page in self.results:
-                del self.results[current_page]
+                self.results[current_page] = None
 
             # Переходим к следующей, если есть
             if self.current_process_idx < len(self.pages) - 1:
@@ -179,8 +179,7 @@ class PlaceImageStampOnA4(QDialog):
         if self.mode == 'multi':
             page_idx = self.pages[self.current_process_idx]
             state = self.stamp_widget.get_state()
-            if state:
-                self.results[page_idx] = state
+            self.results[page_idx] = state
 
     # ---------------------- ОДНОСТРАНИЧНЫЙ РЕЖИМ (листание) ----------------------
     def prev_page(self):
@@ -207,8 +206,8 @@ class PlaceImageStampOnA4(QDialog):
     def closeEvent(self, event):
         """Обработка нажатия на крестик окна."""
         reply = QMessageBox.question(
-            self, 'Подтверждение',
-            'Все несохраненные изменения будут потеряны. Продолжить?',
+            self, 'Подтвердите отмену',
+            'Документ будет подписан без нанесения штампов. Продолжить?',
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No
         )

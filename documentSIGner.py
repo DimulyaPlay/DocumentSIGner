@@ -11,7 +11,7 @@ import traceback
 
 # .venv\Scripts\pyinstaller.exe --windowed --noconfirm --contents-directory "." --icon "icons8-legal-document-64.ico" --add-data "icons8-legal-document-64.ico;." --add-data "35.gif;." --add-data "Update.exe;." --add-data "Update.cfg;." --add-data "dcs.png;." --add-data "dcs-copy-in-law.png;." --add-data "dcs-copy-no-in-law.png;." documentSIGner.py
 
-version = 'Версия 2.6 Сборка 060520251'
+version = 'Версия 2.6 Сборка 050620251'
 
 
 def exception_hook(exc_type, exc_value, exc_traceback):
@@ -421,6 +421,9 @@ if __name__ == '__main__':
             if result:
                 sys.exit(0)
     else:
+        if getattr(sys, 'frozen', True) or '__compiled__' in globals():
+            sys.stdout = open('console_output.log', 'a', buffering=1)
+            sys.stderr = open('console_errors.log', 'a', buffering=1)
         try:
             update_updater()
         except Exception as e:
