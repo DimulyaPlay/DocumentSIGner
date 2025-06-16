@@ -11,7 +11,7 @@ import traceback
 
 # .venv\Scripts\pyinstaller.exe --windowed --noconfirm --contents-directory "." --icon "icons8-legal-document-64.ico" --add-data "icons8-legal-document-64.ico;." --add-data "35.gif;." --add-data "Update.exe;." --add-data "Update.cfg;." --add-data "dcs.png;." --add-data "dcs-copy-in-law.png;." --add-data "dcs-copy-no-in-law.png;." documentSIGner.py
 
-version = 'Версия 2.6 Сборка 050620251'
+version = 'Версия 2.6 Сборка 090620251'
 
 
 def exception_hook(exc_type, exc_value, exc_traceback):
@@ -48,6 +48,11 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.toggle_autorun.setCheckable(True)
         self.toggle_autorun.setChecked(config['autorun'])
         self.toggle_autorun.triggered.connect(self.toggle_startup)
+
+        self.normalize_a4_action = menu.addAction("Вписывать страницы в формат A4")
+        self.normalize_a4_action.setCheckable(True)
+        self.normalize_a4_action.setChecked(config.get('normalize_to_a4', False))
+        self.normalize_a4_action.triggered.connect(self.toggle_normalize_to_a4)
 
         self.toggle_notify = menu.addAction("Уведомлять о новых")
         self.toggle_notify.setCheckable(True)
@@ -200,6 +205,8 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
 
     def show_menu(self, reason=QtWidgets.QSystemTrayIcon.Trigger):
         self.update_label_text()
+        self.dialog.fit_in_a4.setChecked(config['normalize_to_a4'])
+        self.dialog.sign_original.setChecked(config['stamp_on_original'])
         try:
             if self.dialog.isVisible():
                 self.dialog.activateWindow()
@@ -294,6 +301,10 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
                 config['context_menu'] = False
             else:
                 self.toggle_context_menu.setChecked(True)
+        save_config()
+
+    def toggle_normalize_to_a4(self):
+        config['normalize_to_a4'] = self.normalize_a4_action.isChecked()
         save_config()
 
     def toggle_notifier(self):

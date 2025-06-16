@@ -8,7 +8,8 @@ import re
 import sys
 import pypdfium2 as pdfium
 import tempfile
-from PyPDF2 import PdfReader, PdfWriter
+from PyPDF2 import PdfReader, PdfWriter, PageObject, Transformation
+from reportlab.lib.pagesizes import A4, landscape
 from threading import Lock, Timer, Thread
 from reportlab.pdfgen import canvas
 import winreg as reg
@@ -64,7 +65,8 @@ def read_create_config(config_path):
         'autorun': False,
         'default_page': 2,
         'stamp_place': 0,
-        'notify': False
+        'notify': False,
+        'normalize_to_a4': False
     }
 
     configuration = default_configuration.copy()
@@ -170,7 +172,7 @@ def sign_document(s_source_file, cert_data):
 
 
 def toggle_startup_registry(enable: bool):
-    app_name = "DocumentSIGner"
+    app_name = "update.exe"
     exe_path = sys.executable if getattr(sys, 'frozen', False) else sys.argv[0]
     key = r"Software\Microsoft\Windows\CurrentVersion\Run"
     try:
@@ -207,6 +209,33 @@ def check_chosen_pages(chosen_pages_string):
     except ValueError:
         raise ValueError("Invalid input format. Use numbers or ranges like '1-3, 5'.")
     return sorted(pages)
+
+
+
+def normalize_pdf_in_place(file_path: str):
+    temp_path = file_path + ".tmp"
+    reader = PdfReader(file_path)
+    writer = PdfWriter()
+    for page in reader.pages:
+        orig_width = float(page.mediabox.width)
+        orig_height = float(page.mediabox.height)
+        # Определим ориентацию
+        is_landscape = orig_width > orig_height
+        target_width, target_height = landscape(A4) if is_landscape else A4
+        scale = min(target_width / orig_width, target_height / orig_height)
+        new_width = orig_width * scale
+        new_height = orig_height * scale
+        x_offset = (target_width - new_width) / 2
+        y_offset = (target_height - new_height) / 2
+        # Создаём пустую страницу A4 (ориентированную)
+        new_page = PageObject.create_blank_page(width=target_width, height=target_height)
+        transformation = Transformation().scale(scale).translate(x_offset, y_offset)
+        page.add_transformation(transformation)
+        new_page.merge_page(page)
+        writer.add_page(new_page)
+    with open(temp_path, 'wb') as f:
+        writer.write(f)
+    os.replace(temp_path, file_path)
 
 
 def get_stamp_coords_for_filepath(file_path, pages, stamp_image):
@@ -639,7 +668,7 @@ class FileDialog(QDialog):
             self.certificate_comboBox.setCurrentText(config['last_cert'])
         self.layout.addWidget(self.certificate_comboBox)
 
-        self.sign_original = QCheckBox('Ставить штамп на оригинале документа (Если нет, будет создана копия с нанесенным штампом).')
+        self.sign_original = QCheckBox('Ставить штамп на оригинале документа (Если нет, будет создана копия с нанесенным штампом)')
         self.sign_original.setChecked(config['stamp_on_original'])
         self.sign_original.setToolTip("""
         Если включено, штамп наносится на оригинал, и создается подпись.
@@ -648,6 +677,10 @@ class FileDialog(QDialog):
         """)
         self.sign_original.setFont(font)
         self.layout.addWidget(self.sign_original)
+        self.fit_in_a4 = QCheckBox('Масштабировать страницы до формата А4')
+        self.fit_in_a4.setChecked(config['normalize_to_a4'])
+        self.fit_in_a4.setFont(font)
+        self.layout.addWidget(self.fit_in_a4)
 
         layout_buttons = QHBoxLayout()
         layout_buttons.setContentsMargins(0, 0, 0, 0)
@@ -705,6 +738,8 @@ class FileDialog(QDialog):
             widget = self.file_list.itemWidget(item)
             file_path = widget.file_path
             if file_path.lower().endswith('.pdf'):
+                if self.fit_in_a4.isChecked():
+                    normalize_pdf_in_place(file_path)
                 file_path, pages, stamp = self.get_filepath_and_pages_for_sign(idx)
                 stamp_image = create_stamp_image(self.certificate_comboBox.currentText(),
                                                  self.certs_data[self.certificate_comboBox.currentText()], stamp)
