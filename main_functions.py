@@ -870,6 +870,7 @@ class FileDialog(QDialog):
                 os.remove(backup_file)
                 for rule in self.rules:
                     source_dir, patterns, dest_dir, _ = rule.strip().split('|')
+                    source_dir, patterns, dest_dir = source_dir.lower(), patterns, dest_dir.lower()
                     if file_path.startswith(source_dir):
                         patterns_list = patterns.split(';')
                         all_patterns_match = True
@@ -882,6 +883,8 @@ class FileDialog(QDialog):
                                 new_file_path = os.path.join(dest_dir, os.path.basename(file_path))
                                 shutil.move(file_path, dest_dir)
                                 shutil.move(sign_path, dest_dir)
+                                item = self.file_list.item(index)
+                                widget = self.file_list.itemWidget(item)
                                 widget.file_path = new_file_path
                                 if filepath_to_stamp:
                                     shutil.move(filepath_to_stamp, dest_dir)
