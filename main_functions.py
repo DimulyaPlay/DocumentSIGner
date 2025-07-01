@@ -172,8 +172,9 @@ def sign_document(s_source_file, cert_data):
 
 
 def toggle_startup_registry(enable: bool):
-    app_name = "update.exe"
+    app_name = "DocumentSIGner"
     exe_path = sys.executable if getattr(sys, 'frozen', False) else sys.argv[0]
+    exe_path = os.path.join(os.path.dirname(exe_path), 'update.exe')
     key = r"Software\Microsoft\Windows\CurrentVersion\Run"
     try:
         with reg.OpenKey(reg.HKEY_CURRENT_USER, key, 0, reg.KEY_ALL_ACCESS) as reg_key:
