@@ -13,6 +13,8 @@ from reportlab.lib.pagesizes import A4, landscape
 from threading import Lock, Timer, Thread
 from reportlab.pdfgen import canvas
 import winreg as reg
+import winshell
+from win32com.client import Dispatch
 from PySide2.QtWidgets import (QApplication, QAbstractItemView, QAction, QDialog,
                                QMenu, QVBoxLayout, QListWidget, QTableWidget,
                                QTableWidgetItem, QListWidgetItem, QHBoxLayout,
@@ -106,28 +108,44 @@ def get_console_encoding():
 
 
 def get_cert_data():
-    encoding =get_console_encoding()
+    encoding = get_console_encoding()
     cert_mgr_path = os.path.join(config['csp_path'], 'certmgr.exe')
     if os.path.exists(cert_mgr_path):
         certs_data = {}
         try:
-            result = subprocess.run([cert_mgr_path, '-list'],
-                                    capture_output=True,
-                                    text=True, check=True,
-                                    encoding=encoding,
-                                    creationflags=subprocess.CREATE_NO_WINDOW)
+            result = subprocess.run(
+                [cert_mgr_path, '-list'],
+                capture_output=True, text=True, check=True,
+                encoding=encoding,
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
             output = result.stdout
             for i in output.split('-------')[1:]:
                 rows = i.split('\n')
                 cert = {}
+                base_name = None
                 for row in rows:
                     cleaned_row = ' '.join(row.split()).split(" : ")
                     if len(cleaned_row) == 2:
-                        cert[cleaned_row[0]] = cleaned_row[1]
-                        if 'CN=' in cleaned_row[1] and 'CN=Казначейство России' not in cleaned_row[1]:
-                            cert_name = re.search(r'CN=([^\n]+)', cleaned_row[1]).group(1)
-                            if cert_name.lower() not in ('федеральное казначейство',):
-                                certs_data[cert_name] = cert
+                        key, val = cleaned_row
+                        cert[key] = val
+                        if base_name is None and 'CN=' in val and 'CN=Казначейство России' not in val:
+                            m = re.search(r'CN=([^\n]+)', val)
+                            if not m:
+                                continue
+                            bn = m.group(1).split(',', 1)[0].strip()
+                            if bn.lower() in ('федеральное казначейство',):
+                                continue
+                            base_name = bn
+                if base_name:
+                    exp_date = cert.get('Истекает', cert.get('Not valid after', ' '))[:10].replace('/', '.')
+                    candidate = f"{base_name} ({exp_date})" if exp_date.strip() else base_name
+                    if candidate in certs_data:
+                        suffix = 1
+                        while f"{candidate} ({suffix})" in certs_data:
+                            suffix += 1
+                        candidate = f"{candidate} ({suffix})"
+                    certs_data[candidate] = cert
         except subprocess.CalledProcessError as e:
             print(f"Ошибка выполнения команды: {e}")
         return certs_data
@@ -175,11 +193,12 @@ def toggle_startup_registry(enable: bool):
     app_name = "DocumentSIGner"
     exe_path = sys.executable if getattr(sys, 'frozen', False) else sys.argv[0]
     exe_path = os.path.join(os.path.dirname(exe_path), 'update.exe')
+    exe_path_with_param = f'"{exe_path}" -autorun'
     key = r"Software\Microsoft\Windows\CurrentVersion\Run"
     try:
         with reg.OpenKey(reg.HKEY_CURRENT_USER, key, 0, reg.KEY_ALL_ACCESS) as reg_key:
             if enable:
-                reg.SetValueEx(reg_key, app_name, 0, reg.REG_SZ, f'"{exe_path}"')
+                reg.SetValueEx(reg_key, app_name, 0, reg.REG_SZ, exe_path_with_param)
             else:
                 try:
                     reg.DeleteValue(reg_key, app_name)
@@ -208,9 +227,9 @@ def check_chosen_pages(chosen_pages_string):
             else:
                 pages.add(int(part) - 1)  # Добавляем одиночные страницы, с учетом индексации с нуля
     except ValueError:
-        raise ValueError("Invalid input format. Use numbers or ranges like '1-3, 5'.")
+        print("Invalid input format. Use numbers or ranges like '1-3, 5'.")
+        return None
     return sorted(pages)
-
 
 
 def normalize_pdf_in_place(file_path: str):
@@ -463,13 +482,15 @@ class CustomListWidgetItem(QWidget):
         self.stamp_date = ''
         self.file_path = file_path.lower()
         self.file_path_orig = file_path
+        self.is_file_empty = os.path.isfile(file_path) and os.path.getsize(file_path) == 0
         self.gf_file_path = None
         if self.file_path.endswith('.pdf'):
             # Получаем директорию и имя файла
             directory, filename = os.path.split(self.file_path)
             self.gf_file_path = os.path.join(directory, f"gf_{filename}")
         self.file_id = file_id
-        self.name = name
+        self.name = name if name else os.path.basename(file_path)
+        self.name = "[ПУСТОЙ ФАЙЛ]" + self.name if self.is_file_empty else self.name
         self.sig_pages = sig_pages
         self.page_fragment = ""  # Переменная для хранения найденного фрагмента
         # Главный горизонтальный layout
@@ -477,12 +498,13 @@ class CustomListWidgetItem(QWidget):
         # Левая часть: чекбокс и лейбл
         left_layout = QHBoxLayout()
         self.chb = QCheckBox()
+        self.chb.setDisabled(self.is_file_empty)
         left_layout.addWidget(self.chb)
 
-        self.file_label = QLabel(os.path.basename(file_path) if name is None else name)
+        self.file_label = QLabel(self.name)
         self.file_label.mouseDoubleClickEvent = self.open_file
         self.file_label.setMinimumWidth(400)
-        self.file_label.setToolTip(os.path.basename(file_path) if name is None else name)
+        self.file_label.setToolTip(self.name)
         self.file_label.setWordWrap(True)
         left_layout.addWidget(self.file_label)
         left_layout.addStretch()  # Добавляем растяжение для выравнивания
@@ -523,6 +545,7 @@ class CustomListWidgetItem(QWidget):
         self.custom_pages.setPlaceholderText("Введите страницы")
         self.custom_pages.setEnabled(self.file_path.endswith('.pdf'))
         self.custom_pages.textEdited.connect(lambda: self.radio_custom.setChecked(True))
+        self.custom_pages.editingFinished.connect(self.validate_pages_input)
         self.custom_pages.setFixedWidth(115)  # Фиксированная ширина
         top_radio_layout.addWidget(self.custom_pages)
         if self.sig_pages:
@@ -566,6 +589,23 @@ class CustomListWidgetItem(QWidget):
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
         self.setLayout(main_layout)
+
+    def validate_pages_input(self):
+        text = self.custom_pages.text().strip()
+        if not text:  # пустое — не проверяем
+            self.custom_pages.setStyleSheet("")
+            return
+        try:
+            pages = check_chosen_pages(text)
+            if pages is None:
+                raise ValueError
+            # Если всё ок — убираем подсветку
+            self.custom_pages.setStyleSheet("")
+        except Exception:
+            # Подсветка красным
+            self.custom_pages.setStyleSheet("background-color: rgba(255, 0, 0, 128);")
+            QMessageBox.warning(self, "Ошибка",
+                                "Неверно указаны страницы для штампа.\nИспользуйте числа или диапазоны (например, 1-3, 5).")
 
     def show_context_menu(self, pos):
         menu = QMenu(self)
@@ -1151,20 +1191,15 @@ class FileWatcher:
 
 def update_updater():
     import configparser
-    # Загрузка конфигурационного файла
     config = configparser.ConfigParser()
     config.read('update.cfg')
     reference_folder = config['Settings']['reference_folder']
-    # Файлы для обновления обновлятора
     updater_files = ['update.exe', 'update.cfg']
-    # Проверка и копирование новых версий файлов обновлятора
     for file in updater_files:
         local_file_path = os.path.join(os.getcwd(), file)
         reference_file_path = os.path.join(reference_folder, file)
-
         if os.path.exists(reference_file_path) and os.path.exists(local_file_path):
             if os.path.getmtime(reference_file_path) > os.path.getmtime(local_file_path):
-                # Копирование файла
                 shutil.copy2(reference_file_path, local_file_path)
                 print(f"Updated {file} to the latest version.")
             else:

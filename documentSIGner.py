@@ -9,9 +9,9 @@ import msvcrt
 import os
 import traceback
 
-# .venv\Scripts\pyinstaller.exe --windowed --noconfirm --contents-directory "." --icon "icons8-legal-document-64.ico" --add-data "icons8-legal-document-64.ico;." --add-data "35.gif;." --add-data "Update.exe;." --add-data "Update.cfg;." --add-data "dcs.png;." --add-data "dcs-copy-in-law.png;." --add-data "dcs-copy-no-in-law.png;." documentSIGner.py
+# .venv\Scripts\pyinstaller.exe --windowed --noconfirm --contents-directory "." --icon "icons8-legal-document-64.ico" --add-data "icons8-legal-document-64.ico;." --add-data "35.gif;." --add-data "C:\Users\CourtUser\Documents\PyCharmProjects\universal_app_updater\dist\Update.exe;." --add-data "Update.cfg;." --add-data "dcs.png;." --add-data "dcs-copy-in-law.png;." --add-data "dcs-copy-no-in-law.png;." documentSIGner.py
 
-version = 'Версия 2.6 Сборка 010720251fix'
+version = 'Версия 2.6 Сборка 11082025'
 
 
 def exception_hook(exc_type, exc_value, exc_traceback):
@@ -142,6 +142,7 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.update_label_text()
         if config['notify']:
             self.create_notifiers()
+        toggle_startup_registry(config['autorun'])
 
     def start_doc_count_monitor(self):
         self.icon_timer = QtCore.QTimer()
