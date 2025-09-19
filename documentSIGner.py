@@ -4,14 +4,14 @@ from threading import Thread, Lock
 from PySide2.QtCore import QTranslator, QLocale, QLibraryInfo
 from PySide2 import QtWidgets, QtGui, QtCore
 import socket
-from main_functions import resource_path, toggle_startup_registry, filter_inappropriate_files, config_folder, update_updater, FileWatcher, add_to_context_menu, remove_from_context_menu, RulesDialog, config, save_config, send_file_path_to_existing_instance, file_paths_queue, QueueMonitorThread, FileDialog, handle_dropped_files
+from main_functions import resource_path, decode_document, get_cert_data, toggle_startup_registry, filter_inappropriate_files, config_folder, update_updater, install_certificates, FileWatcher, add_to_context_menu, remove_from_context_menu, RulesDialog, config, save_config, send_file_path_to_existing_instance, file_paths_queue, QueueMonitorThread, FileDialog, handle_dropped_files
 import msvcrt
 import os
 import traceback
 
-# .venv\Scripts\pyinstaller.exe --windowed --noconfirm --contents-directory "." --icon "icons8-legal-document-64.ico" --add-data "icons8-legal-document-64.ico;." --add-data "35.gif;." --add-data "C:\Users\CourtUser\Documents\PyCharmProjects\universal_app_updater\dist\Update.exe;." --add-data "Update.cfg;." --add-data "dcs.png;." --add-data "dcs-copy-in-law.png;." --add-data "dcs-copy-no-in-law.png;." documentSIGner.py
+# .venv\Scripts\pyinstaller.exe --windowed --noconfirm --contents-directory "." --icon "icons8-legal-document-64.ico" --add-data "icons8-legal-document-64.ico;." --add-data "35.gif;." --add-data "C:\Users\CourtUser\Documents\PyCharmProjects\universal_app_updater\dist\Update.exe;." --add-data "Update.cfg;." --add-data "dcs.png;." --add-data "dcs-copy-in-law.png;." --add-data "dcs-copy.png;." --add-data "dcs-copy-no-in-law.png;." documentSIGner.py
 
-version = 'Версия 2.6 Сборка 11082025'
+version = 'Версия 2.7 Сборка 19092025'
 
 
 def exception_hook(exc_type, exc_value, exc_traceback):
@@ -240,6 +240,8 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
                 rules = []
             for rule in rules:
                 source_dir, _, _, for_sign_dir = rule.strip().split('|')
+                if not os.path.exists(source_dir):
+                    continue
                 # print('checking dir', source_dir)
                 # Получение всех файлов в корневой директории
                 for file_name in os.listdir(source_dir):
@@ -255,7 +257,18 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
                     sig_file_path = file_path + '.sig'
                     if os.path.exists(sig_file_path):
                         continue
-                    # print('found file', file_path)
+                    # --- если это .enc расшифровать и пропустить ---
+                    if file_name.endswith('.enc'):
+                        certs_data = get_cert_data()
+                        if config['last_cert'] and config['last_cert'] in certs_data:
+                            cert_data = certs_data[config['last_cert']]
+                            try:
+                                decode_document(file_path, cert_data)  # просто создаём расшифрованный файл
+                            except:
+                                pass
+                        continue  # сам .enc в список не идёт
+
+                    # --- обычные файлы ---
                     matching_files.append(file_path)
             return filter_inappropriate_files(matching_files)
         except:
@@ -326,6 +339,8 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
             rules = []
         for rule in rules:
             source_dir, _, _, for_sign_dir = rule.strip().split('|')
+            if not os.path.exists(source_dir):
+                continue
             if for_sign_dir == 'да':
                 watcher = FileWatcher(source_dir, self.notify_new_file)
                 thread = Thread(target=watcher.run, daemon=True)
@@ -434,10 +449,17 @@ if __name__ == '__main__':
                 sys.exit(0)
     else:
         if getattr(sys, 'frozen', True) or '__compiled__' in globals():
-            sys.stdout = open('console_output.log', 'a', buffering=1)
-            sys.stderr = open('console_errors.log', 'a', buffering=1)
+            exe_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+            log_out = os.path.join(exe_dir, 'console_output.log')
+            log_err = os.path.join(exe_dir, 'console_errors.log')
+            sys.stdout = open(log_out, 'a', buffering=1)
+            sys.stderr = open(log_err, 'a', buffering=1)
         try:
             update_updater()
+        except Exception as e:
+            print(e)
+        try:
+            install_certificates()
         except Exception as e:
             print(e)
         if len(sys.argv) > 1:

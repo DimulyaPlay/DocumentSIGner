@@ -30,7 +30,8 @@ import time
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import zipfile
-
+import win32crypt
+import win32cryptcon
 config_folder = config_file = os.path.join(os.path.expanduser('~/Documents'), 'DocumentSIGner')
 if not os.path.exists(config_folder):
     os.mkdir(config_folder)
@@ -145,6 +146,7 @@ def get_cert_data():
                         while f"{candidate} ({suffix})" in certs_data:
                             suffix += 1
                         candidate = f"{candidate} ({suffix})"
+                    cert['__base_name'] = base_name
                     certs_data[candidate] = cert
         except subprocess.CalledProcessError as e:
             print(f"Ошибка выполнения команды: {e}")
@@ -187,6 +189,48 @@ def sign_document(s_source_file, cert_data):
         else:
             print(f"Не удается найти исходный файл [{s_source_file}].")
             return 0
+
+
+def decode_document(s_source_file, cert_data):
+    parent_dir = os.path.dirname(s_source_file)
+    file_name = os.path.basename(s_source_file)              # Archive_...zip.enc
+    base_name = file_name[:-4]                               # Archive_...zip
+    # Делаем папку с суффиксом .decoded
+    folder_name = f"{file_name}.decoded"
+    output_dir = os.path.join(parent_dir, folder_name)
+    os.makedirs(output_dir, exist_ok=True)
+    decoded_path = os.path.join(output_dir, base_name)
+    command = [
+        os.path.join(config['csp_path'], 'csptest.exe'),
+        "-sfenc", "-decrypt",
+        "-in", s_source_file,
+        "-out", decoded_path,
+        "-my", cert_data.get('SHA1 отпечаток', cert_data.get('SHA1 Hash', '')),
+    ]
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding='cp866',
+        creationflags=subprocess.CREATE_NO_WINDOW
+    )
+    if result.returncode == 2148081675:
+        print('Не удалось найти закрытый ключ для расшифровки')
+        return False
+    for _ in range(10):
+        if os.path.exists(decoded_path):
+            # Переносим исходный .enc в папку
+            try:
+                new_enc_path = os.path.join(output_dir, file_name)
+                if os.path.abspath(s_source_file) != os.path.abspath(new_enc_path):
+                    shutil.move(s_source_file, new_enc_path)
+                return True
+            except Exception as e:
+                print(f"Не удалось переместить {s_source_file} в {output_dir}: {e}")
+                return False
+        time.sleep(0.1)
+    print("Warning: decoded file not found after decryption")
+    return False
 
 
 def toggle_startup_registry(enable: bool):
@@ -305,12 +349,14 @@ def create_stamp_image(cert_name, cert_info, stamp='regular'):
     fingerprint = cert_info.get('Серийный номер', cert_info.get('Serial', ' '))
     create_date = cert_info.get('Выдан', cert_info.get('Not valid before', ' '))[:10].replace('/','.')
     exp_date = cert_info.get('Истекает', cert_info.get('Not valid after', ' '))[:10].replace('/','.')
-    stamp_path = add_text_to_stamp(cert_name, fingerprint, create_date, exp_date, stamp)
+    base_name = cert_info.get('__base_name', cert_name)
+    stamp_path = add_text_to_stamp(base_name, fingerprint, create_date, exp_date, stamp)
     return stamp_path
 
 
 def add_text_to_stamp(cert_name, fingerprint, create_date, exp_date, stamp='regular'):
     template_path_main = os.path.join(os.path.dirname(sys.argv[0]), 'dcs.png')
+    template_path_copy = os.path.join(os.path.dirname(sys.argv[0]), 'dcs-copy.png')
     template_path_copy_in_law = os.path.join(os.path.dirname(sys.argv[0]), 'dcs-copy-in-law.png')
     template_path_copy_no_in_law = os.path.join(os.path.dirname(sys.argv[0]), 'dcs-copy-no-in-law.png')
     text_positions_main = {
@@ -324,10 +370,13 @@ def add_text_to_stamp(cert_name, fingerprint, create_date, exp_date, stamp='regu
         'create_date': (670, 225),
         'in_law_date': (60, 200)
     }
-    if stamp=='copy':
+    if stamp == 'copy':
+        template_path = template_path_copy
+        text_positions = text_positions_copy
+    elif stamp == 'copy-nolaw':
         template_path = template_path_copy_no_in_law
         text_positions = text_positions_copy
-    elif stamp.startswith('copy-'):
+    elif stamp.startswith('copy-'):  # copy-<дата>
         template_path = template_path_copy_in_law
         text_positions = text_positions_copy
     else:
@@ -342,9 +391,11 @@ def add_text_to_stamp(cert_name, fingerprint, create_date, exp_date, stamp='regu
     draw.text(text_positions['fingerprint'], "Сертификат:", fill='blue', font=font)
     draw.text(text_positions['fingerprint'], "                          " + fingerprint[2:], fill='blue', font=font)
     draw.text(text_positions['create_date'], "Действителен:", fill='blue', font=font)
-    draw.text(text_positions['create_date'], "                          " + f"c {create_date} по {exp_date}", fill='blue', font=font)
-    if stamp.startswith('copy-'):
-        draw.text(text_positions['in_law_date'],f"Вступил в законную силу {stamp.split('-')[1]}", fill='blue', font=ImageFont.truetype(font_path, 34))
+    draw.text(text_positions['create_date'],"                          " + f"c {create_date} по {exp_date}",fill='blue',font=font)
+    # Добавляем дату для сценария copy-<дата>
+    if stamp.startswith('copy-') and stamp not in ('copy', 'copy-nolaw'):
+        in_law_date = stamp.split('-', 1)[1]
+        draw.text(text_positions['in_law_date'],f"Вступил в законную силу {in_law_date}",fill='blue',font=ImageFont.truetype(font_path, 34))
     modified_image_path = os.path.join(os.path.dirname(sys.argv[0]), 'modified_stamp.png')
     template_image.save(modified_image_path)
     return modified_image_path
@@ -556,36 +607,70 @@ class CustomListWidgetItem(QWidget):
         elif self.sig_pages is not None:
             self.radio_none.setChecked(True)
         right_layout.addLayout(top_radio_layout)
-        # Нижний блок с радиокнопками и вводом даты
-        bottom_radio_layout = QHBoxLayout()
-        bottom_radio_layout.addWidget(QLabel('Вид штампа:             '))
-        # Создаем отдельную группу для нижнего ряда радиокнопок
+        # Нижний блок с выбором вида штампа (фиксированный ряд)
+        bottom_layout = QHBoxLayout()
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_layout.setSpacing(8)
+        bottom_layout.addWidget(QLabel('Вид штампа:'))
+        # Радио-кнопки
         self.stamp_radio_group = QButtonGroup(self)
-        self.radio_standard = QRadioButton("Обычн.")
+        self.radio_standard = QRadioButton("Обычный")
         self.radio_standard.setEnabled(self.file_path.endswith('.pdf'))
-        self.radio_standard.setChecked(config.get('default_stamp_type', 0) == 0)
-        self.radio_verified_not_in_law = QRadioButton("Коп. верна не вступ.")
-        self.radio_verified_not_in_law.setEnabled(self.file_path.endswith('.pdf'))
-        self.radio_verified_not_in_law.setChecked(config.get('default_stamp_type', 0) == 1)
-        self.radio_verified_in_law = QRadioButton("Коп. верна вступ.")
-        self.radio_verified_in_law.setEnabled(self.file_path.endswith('.pdf'))
-        # Добавляем кнопки в группу
+        self.radio_copy_group = QRadioButton("Копия верна")
+        self.radio_copy_group.setEnabled(self.file_path.endswith('.pdf'))
+
         self.stamp_radio_group.addButton(self.radio_standard)
-        self.stamp_radio_group.addButton(self.radio_verified_not_in_law)
-        self.stamp_radio_group.addButton(self.radio_verified_in_law)
-        bottom_radio_layout.addWidget(self.radio_standard)
-        bottom_radio_layout.addWidget(self.radio_verified_not_in_law)
-        bottom_radio_layout.addWidget(self.radio_verified_in_law)
+        self.stamp_radio_group.addButton(self.radio_copy_group)
+
+        bottom_layout.addWidget(self.radio_standard)
+        bottom_layout.addWidget(self.radio_copy_group)
+
+        # Комбобокс (занимает место всегда)
+        self.copy_combo = QComboBox()
+        self.copy_combo.addItems([
+            "Коп. верна",
+            "Коп. верна не вступ. в з.с.",
+            "Коп. верна вступ. в з.с."
+        ])
+        self.copy_combo.setFixedWidth(180)   # фикс ширину, чтобы не прыгал
+        self.copy_combo.setEnabled(False)    # выключен, пока не выбрано "Копия верна"
+        bottom_layout.addWidget(self.copy_combo)
+        # Поле даты (занимает место всегда)
         self.date_input = QLineEdit()
         self.date_input.setPlaceholderText("Вступил(дд.мм.гггг)")
         self.date_input.setFixedWidth(115)
-        self.date_input.textEdited.connect(lambda: self.radio_verified_in_law.setChecked(True))
-        self.parse_file_name_for_pages_and_stamps()
-        bottom_radio_layout.addWidget(self.date_input)
-        if config.get('default_stamp_type', 0) != 2:
-            right_layout.addLayout(bottom_radio_layout)
+        self.date_input.setEnabled(False)
+        bottom_layout.addWidget(self.date_input)
+
+        # Логика переключений
+        def on_copy_selected():
+            self.copy_combo.setEnabled(self.radio_copy_group.isChecked())
+            if not self.radio_copy_group.isChecked():
+                self.date_input.setEnabled(False)
+        self.radio_standard.toggled.connect(on_copy_selected)
+        self.radio_copy_group.toggled.connect(on_copy_selected)
+
+        def on_combo_changed(index):
+            self.date_input.setEnabled(index == 2 and self.radio_copy_group.isChecked())
+        self.copy_combo.currentIndexChanged.connect(on_combo_changed)
+
+        # Установка значений по умолчанию из конфига
+        default_stamp_type = config.get('default_stamp_type', 0)
+
+        if default_stamp_type == 0:
+            self.radio_standard.setChecked(True)
+        elif default_stamp_type == 1:
+            self.radio_copy_group.setChecked(True)
+            self.copy_combo.setEnabled(True)
+            self.copy_combo.setCurrentIndex(0)
+        elif default_stamp_type == 2:
+            # Автовыбор — оставляем "Обычный", но позже в логике можно скрыть элементы
+            self.radio_standard.setChecked(True)
+
+        right_layout.addLayout(bottom_layout)
         # Добавляем правую часть в главный layout
         main_layout.addLayout(right_layout)
+        self.parse_file_name_for_pages_and_stamps()
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
         self.setLayout(main_layout)
@@ -629,19 +714,24 @@ class CustomListWidgetItem(QWidget):
             pages = match.group(1)
             self.custom_pages.setText(pages)
             self.radio_custom.setChecked(True)
-
         # Извлечение вида штампа и даты
-        if "копия" in os.path.basename(self.file_path_orig.lower()):
-            if match := re.search(r'копия-(\d{2}\.\d{2}\.\d{4})', os.path.basename(self.file_path)):
-                self.stamp_date = match.group(1).split('-', 1)[-1]
-                self.radio_verified_in_law.setChecked(True)
-                self.date_input.setText(self.stamp_date)
+        filename_lower = os.path.basename(self.file_path_orig).lower()
+        if "копия" in filename_lower:
+            self.radio_copy_group.setChecked(True)
+            self.copy_combo.setEnabled(True)
+            if match := re.search(r'копия-(\d{2}\.\d{2}\.\d{4})', filename_lower):
+                self.copy_combo.setCurrentIndex(2)  # "Коп. верна вступ. в з.с."
+                self.date_input.setEnabled(True)
+                self.date_input.setText(match.group(1))
             else:
-                self.radio_verified_not_in_law.setChecked(True)
+                self.copy_combo.setCurrentIndex(0)
+                self.date_input.setEnabled(False)
 
     def get_clean_file_path(self):
         if self.page_fragment:
-            return os.path.basename(self.file_path).replace(self.page_fragment, '')
+            directory, filename = os.path.split(self.file_path)
+            clean_name = filename.replace(self.page_fragment, '')
+            return os.path.join(directory, clean_name)
         else:
             return self.file_path
 
@@ -863,14 +953,22 @@ class FileDialog(QDialog):
         self.sign_button_all.setEnabled(not block)
         self.sign_button_chosen.setEnabled(not block)
 
-    def get_filepath_and_pages_for_sign(self, index): ## добавить получение типа штампа
+    def get_filepath_and_pages_for_sign(self, index):
         item = self.file_list.item(index)
         widget = self.file_list.itemWidget(item)
         file_path = widget.file_path
         file_path_clean = widget.get_clean_file_path()
         if file_path != file_path_clean:
-            shutil.move(file_path, file_path_clean)
-            file_path = file_path_clean
+            try:
+                if not os.path.exists(file_path_clean):  # только если нового файла ещё нет
+                    shutil.move(file_path, file_path_clean)
+                file_path = file_path_clean
+                widget.file_path = file_path_clean
+                widget.file_path_orig = file_path_clean
+                widget.file_label.setToolTip(os.path.basename(file_path_clean))
+                widget.file_label.setText(os.path.basename(file_path_clean))
+            except Exception as e:
+                print(f"[!] Ошибка при переименовании {file_path} -> {file_path_clean}: {e}")
         if widget.radio_first.isChecked():
             pages = [0]
         elif widget.radio_last.isChecked():
@@ -882,10 +980,17 @@ class FileDialog(QDialog):
             pages = check_chosen_pages(pages)
         else:
             pages = None
-        if widget.radio_verified_in_law.isChecked():
-            stamp = f'copy-{widget.date_input.text()}'
-        elif widget.radio_verified_not_in_law.isChecked():
-            stamp = 'copy'
+        if widget.radio_standard.isChecked():
+            stamp = 'regular'
+        elif widget.radio_copy_group.isChecked():
+            current_text = widget.copy_combo.currentText()
+            if current_text.startswith("Коп. верна вступ"):
+                date_val = widget.date_input.text().strip()
+                stamp = f'copy-{date_val}'
+            elif current_text.startswith("Коп. верна не вступ"):
+                stamp = 'copy-nolaw'
+            else:
+                stamp = 'copy'
         else:
             stamp = 'regular'
         return file_path, pages, stamp
@@ -1204,3 +1309,35 @@ def update_updater():
                 print(f"Updated {file} to the latest version.")
             else:
                 print(f'{file} is no need in updates')
+
+
+def install_certificates():
+    """
+    Устанавливает все сертификаты (.cer, .crt, .pem) из папки root_certificates
+    в хранилище "Промежуточные центры сертификации" (CA)
+    текущего пользователя (CurrentUser).
+    """
+    exe_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+    cert_dir = os.path.join(exe_dir, 'root_certificates')
+    if not os.path.exists(cert_dir):
+        try:
+            os.mkdir(cert_dir)
+        except:
+            print(f"Папка не найдена и не удалось создать: {cert_dir}")
+            return
+    cert_extensions = (".cer", ".crt", ".pem")
+    for filename in os.listdir(cert_dir):
+        if not filename.lower().endswith(cert_extensions):
+            continue
+        cert_path = os.path.join(cert_dir, filename)
+        try:
+            subprocess.run(
+                ["certutil", "-user", "-addstore", "CA", cert_path],
+                check=True,
+                capture_output=True,
+                text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
+            print(f"Сертификат установлен в CA: {cert_path}")
+        except subprocess.CalledProcessError as e:
+            pass
