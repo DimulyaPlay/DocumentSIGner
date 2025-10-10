@@ -728,10 +728,19 @@ class CustomListWidgetItem(QWidget):
         if "копия" in filename_lower:
             self.radio_copy_group.setChecked(True)
             self.copy_combo.setEnabled(True)
+            from datetime import datetime
             if match := re.search(r'копия-(\d{2}\.\d{2}\.\d{4})', filename_lower):
-                self.copy_combo.setCurrentIndex(2)  # "Коп. верна вступ. в з.с."
-                self.date_input.setEnabled(True)
-                self.date_input.setText(match.group(1))
+                try:
+                    date_obj = datetime.strptime(match.group(1), "%d.%m.%Y").date()
+                    today = datetime.today().date()
+                    if date_obj > today:
+                        self.copy_combo.setCurrentIndex(1)  # "Коп. верна не вступ. в з.с."
+                    else:
+                        self.copy_combo.setCurrentIndex(2)  # "Коп. верна вступ. в з.с."
+                        self.date_input.setEnabled(True)
+                        self.date_input.setText(match.group(1))
+                except ValueError:
+                    self.copy_combo.setCurrentIndex(0)
             else:
                 self.copy_combo.setCurrentIndex(0)
                 self.date_input.setEnabled(False)
