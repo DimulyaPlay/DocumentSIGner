@@ -67,7 +67,7 @@ def read_create_config(config_path):
         "context_menu": False,
         'autorun': False,
         'default_page': 2,
-        'stamp_place': 0,
+        'stamp_place': 1,
         'notify': False,
         'normalize_to_a4': False
     }
@@ -277,29 +277,28 @@ def check_chosen_pages(chosen_pages_string):
 
 
 def normalize_pdf_in_place(file_path: str):
-    temp_path = file_path + ".tmp"
-    reader = PdfReader(file_path)
-    writer = PdfWriter()
-    for page in reader.pages:
-        orig_width = float(page.mediabox.width)
-        orig_height = float(page.mediabox.height)
-        # Определим ориентацию
-        is_landscape = orig_width > orig_height
-        target_width, target_height = landscape(A4) if is_landscape else A4
-        scale = min(target_width / orig_width, target_height / orig_height)
-        new_width = orig_width * scale
-        new_height = orig_height * scale
-        x_offset = (target_width - new_width) / 2
-        y_offset = (target_height - new_height) / 2
-        # Создаём пустую страницу A4 (ориентированную)
-        new_page = PageObject.create_blank_page(width=target_width, height=target_height)
-        transformation = Transformation().scale(scale).translate(x_offset, y_offset)
-        page.add_transformation(transformation)
-        new_page.merge_page(page)
-        writer.add_page(new_page)
-    with open(temp_path, 'wb') as f:
-        writer.write(f)
-    os.replace(temp_path, file_path)
+    exe_dir = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__))
+    pdfcpu_path = os.path.join(exe_dir, "pdfcpu.exe")
+    if not os.path.isfile(pdfcpu_path):
+        raise FileNotFoundError(f"pdfcpu.exe не найден по пути: {pdfcpu_path}")
+    output_path = os.path.join(os.path.dirname(file_path), "output_temp.pdf")
+    cmd = [
+        pdfcpu_path,
+        "resize",
+        "form:A4",
+        file_path,
+        output_path
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            check=True,
+            creationflags=subprocess.CREATE_NO_WINDOW
+        )
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"Ошибка при выполнении pdfcpu:\nSTDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}")
+
+    shutil.move(output_path, file_path)
 
 
 def get_stamp_coords_for_filepath(file_path, pages, stamp_image):
@@ -700,10 +699,20 @@ class CustomListWidgetItem(QWidget):
         menu.exec_(self.mapToGlobal(pos))
 
     def open_file(self, event):
-        if self.gf_file_path and os.path.exists(self.gf_file_path):
-            os.startfile(os.path.normpath(self.gf_file_path))
-        else:
-            os.startfile(self.file_path)
+        target_path = self.gf_file_path if (self.gf_file_path and os.path.exists(self.gf_file_path)) else self.file_path
+        if not os.path.exists(target_path):
+            QMessageBox.warning(
+                None,
+                "Файл не найден",
+                f"Файл «{os.path.basename(target_path)}» пропал из папки, возможно, его переименовали."
+            )
+            parent = self.parent()
+            if isinstance(parent,
+                          QListWidget):
+                row = parent.indexAt(self.pos()).row()
+                parent.takeItem(row)
+            return
+        os.startfile(target_path)
 
     def parse_file_name_for_pages_and_stamps(self):
         # Извлечение страниц из имени файла
@@ -893,9 +902,40 @@ class FileDialog(QDialog):
                 widget.chb.setChecked(False)
         return files_to_sign
 
+    def validate_file_existence(self,
+                                indexes):
+        """Проверяет, что все выбранные файлы существуют"""
+        missing = []
+        for idx in indexes:
+            item = self.file_list.item(idx)
+            widget = self.file_list.itemWidget(item)
+            if not os.path.exists(widget.file_path):
+                missing.append(widget.file_path)
+        if missing:
+            msg = '\n'.join(os.path.basename(fp) for fp in missing)
+            QMessageBox.warning(
+                self,
+                "Файлы не найдены",
+                f"Файлы пропали из папки (возможно, были переименованы):\n\n{msg}"
+            )
+            # Удаляем отсутствующие из списка
+            for idx in sorted(indexes,
+                              reverse=True):
+                item = self.file_list.item(idx)
+                widget = self.file_list.itemWidget(item)
+                if not os.path.exists(widget.file_path):
+                    row = self.file_list.row(item)
+                    self.file_list.takeItem(row)
+            return False
+        return True
+
     def sign_all(self):
         self.current_session_stamps = {}
         self.block_buttons(True)
+        files_to_sign = self.get_file_indexes_for_sign(all=True)
+        if not self.validate_file_existence(files_to_sign):
+            self.block_buttons(False)
+            return
         self.loading_label.show()
         self.loading_label.setMovie(self.movie)
         self.movie.start()
@@ -913,6 +953,11 @@ class FileDialog(QDialog):
         self.loading_label.show()
         self.loading_label.setMovie(self.movie)
         self.movie.start()
+        if not self.validate_file_existence(files_to_sign):
+            self.movie.stop()
+            self.loading_label.clear()
+            self.block_buttons(False)
+            return
         if config.get('stamp_place', 0) == 1:
             self.request_stamp_positions_from_user(files_to_sign)
         if files_to_sign:
@@ -1040,6 +1085,10 @@ class FileDialog(QDialog):
                     os.unlink(filepath_to_stamp)
                 shutil.move(backup_file, file_path)
                 return 1, '', file_path
+        except PermissionError as e:
+            error_msg = f"Файл открыт где-то еще"
+            print(error_msg, file_path)
+            return 1, error_msg, file_path
         except Exception as e:
             print(f'Не удалось подписать: {e}')
             traceback.print_exc()
@@ -1258,13 +1307,15 @@ class FileWatchHandler(FileSystemEventHandler):
             Thread(target=self.process_file, args=(event.src_path,), daemon=True).start()
 
     def process_file(self, fp):
-        time.sleep(2)  # Ожидание, чтобы сигнатурный файл успел появиться
+        time.sleep(8)  # Ожидание, чтобы сигнатурный файл успел появиться
         fn = os.path.basename(fp.lower())
         fp = fp.lower()
         if fp.endswith(ALLOWED_EXTENTIONS) and not fn.startswith(('~', "gf_")) and not os.path.exists(fp + '.sig') and not os.path.exists(fp + '..sig') and not os.path.exists(fp + '.1.sig'):
             self.add_new_file(fp)
 
     def add_new_file(self, fp):
+        if not os.path.exists(fp):
+            return  # файл уже исчез
         with self.lock:
             self.new_files.append(fp)
             if self.notification_timer is None:

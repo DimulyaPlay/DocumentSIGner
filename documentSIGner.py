@@ -9,9 +9,9 @@ import msvcrt
 import os
 import traceback
 
-# .venv\Scripts\pyinstaller.exe --windowed --noconfirm --contents-directory "." --icon "icons8-legal-document-64.ico" --add-data "icons8-legal-document-64.ico;." --add-data "35.gif;." --add-data "C:\Users\CourtUser\Documents\PyCharmProjects\universal_app_updater\dist\Update.exe;." --add-data "Update.cfg;." --add-data "dcs.png;." --add-data "dcs-copy-in-law.png;." --add-data "dcs-copy.png;." --add-data "dcs-copy-no-in-law.png;." documentSIGner.py
+# .venv\Scripts\pyinstaller.exe --windowed --noconfirm --contents-directory "." --icon "icons8-legal-document-64.ico" --add-data "icons8-legal-document-64.ico;." --add-data "35.gif;." --add-data "pdfcpu.exe;." --add-data "C:\Users\CourtUser\Documents\PyCharmProjects\universal_app_updater\dist\Update.exe;." --add-data "Update.cfg;." --add-data "dcs.png;." --add-data "dcs-copy-in-law.png;." --add-data "dcs-copy.png;." --add-data "dcs-copy-no-in-law.png;." documentSIGner.py
 
-version = 'Версия 2.7 Сборка 19092025'
+version = 'Версия 2.7 Сборка 10102025'
 
 
 def exception_hook(exc_type, exc_value, exc_traceback):
