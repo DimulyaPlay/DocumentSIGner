@@ -109,6 +109,7 @@ def get_console_encoding():
 
 
 def get_cert_data():
+    SUBJECT_CN_RE = re.compile(r'(?:^|,\s*)CN=([^,]+)')
     encoding = get_console_encoding()
     cert_mgr_path = os.path.join(config['csp_path'], 'certmgr.exe')
     if os.path.exists(cert_mgr_path):
@@ -130,14 +131,10 @@ def get_cert_data():
                     if len(cleaned_row) == 2:
                         key, val = cleaned_row
                         cert[key] = val
-                        if base_name is None and 'CN=' in val and 'CN=Казначейство России' not in val:
-                            m = re.search(r'CN=([^\n]+)', val)
-                            if not m:
-                                continue
-                            bn = m.group(1).split(',', 1)[0].strip()
-                            if bn.lower() in ('федеральное казначейство',):
-                                continue
-                            base_name = bn
+                        if base_name is None and key in ('Субъект', 'Subject'):
+                            m = SUBJECT_CN_RE.search(val)
+                            if m:
+                                base_name = m.group(1).strip()
                 if base_name:
                     exp_date = cert.get('Истекает', cert.get('Not valid after', ' '))[:10].replace('/', '.')
                     candidate = f"{base_name} ({exp_date})" if exp_date.strip() else base_name
@@ -297,7 +294,6 @@ def normalize_pdf_in_place(file_path: str):
         )
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"Ошибка при выполнении pdfcpu:\nSTDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}")
-
     shutil.move(output_path, file_path)
 
 
@@ -526,6 +522,44 @@ def handle_dropped_files(file_paths, dialog=None):
     return dialog
 
 
+_EPOS_RE = re.compile(
+    r"^(?P<base>.+?)_EPOS_"
+    r"(?P<message_id>\d+)-(?P<attachment_id>\d+)-(?P<stamp_type>\d+)-"
+    r"(?P<stamp_date>\d+)-(?P<stamp_page_mode>\d+)-(?P<stamp_page_custom>[0-9,\-]+)$"
+)
+
+
+def parse_epos_filename(filename: str):
+    """
+    None -> обычный файл (игнор)
+    dict -> EPOS-файл (параметры есть)
+    """
+    name, ext = os.path.splitext(filename)
+    if "_EPOS_" not in name:
+        return None
+    m = _EPOS_RE.match(name)
+    if not m:
+        return None
+    g = m.groupdict()
+
+    # yyyymmdd -> dd.mm.yyyy (для UI)
+    ddmmyyyy = ""
+    d = int(g["stamp_date"])
+    if d:
+        s = f"{d:08d}"
+        ddmmyyyy = f"{s[6:8]}.{s[4:6]}.{s[0:4]}"
+
+    return {
+        "original_filename": 'Email_' + g["base"] + ext,
+        "message_id": int(g["message_id"]),
+        "attachment_id": int(g["attachment_id"]),
+        "stamp_type_code": int(g["stamp_type"]),          # 0..4
+        "stamp_date_ui": ddmmyyyy,                        # "" или "dd.mm.yyyy"
+        "stamp_page_mode_code": int(g["stamp_page_mode"]),# 0..4
+        "stamp_page_custom": g["stamp_page_custom"],      # "0" или "1,2,4-6"
+    }
+
+
 class CustomListWidgetItem(QWidget):
     def __init__(self, file_path, file_id=None, name=None, sig_pages=None):
         super().__init__()
@@ -669,7 +703,9 @@ class CustomListWidgetItem(QWidget):
         right_layout.addLayout(bottom_layout)
         # Добавляем правую часть в главный layout
         main_layout.addLayout(right_layout)
-        self.parse_file_name_for_pages_and_stamps()
+        self.apply_epos_params_if_any()
+        if not getattr(self, "epos_applied", False):
+            self.parse_file_name_for_pages_and_stamps()
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
         self.setLayout(main_layout)
@@ -744,6 +780,56 @@ class CustomListWidgetItem(QWidget):
             else:
                 self.copy_combo.setCurrentIndex(0)
                 self.date_input.setEnabled(False)
+
+    def apply_epos_params_if_any(self):
+        info = parse_epos_filename(os.path.basename(self.file_path_orig))
+        if not info:
+            self.epos_applied = False
+            return
+        self.epos_applied = True
+        self.epos_info = info  # если нужно дальше (attachment_id и т.п.)
+        # Красиво показываем исходное имя (без суффикса), но путь оставляем реальный
+        self.name = info["original_filename"]
+        self.file_label.setText(self.name if not self.is_file_empty else "[ПУСТОЙ ФАЙЛ]" + self.name)
+        self.file_label.setToolTip(self.name)
+        # Автовыбор на подпись
+        self.chb.setChecked(True)
+        # --- страницы штампа ---
+        pm = info["stamp_page_mode_code"]
+        if not self.file_path.endswith('.pdf'):
+            self.radio_none.setChecked(True)
+        else:
+            if pm == 0:
+                self.radio_none.setChecked(True)
+            elif pm == 1:
+                self.radio_first.setChecked(True)
+            elif pm == 2:
+                self.radio_last.setChecked(True)
+            elif pm == 3:
+                self.radio_all.setChecked(True)
+            elif pm == 4:
+                self.radio_custom.setChecked(True)
+                pc = info["stamp_page_custom"]
+                # "0" считаем как пусто
+                self.custom_pages.setText("" if pc == "0" else pc)
+        # --- вид штампа ---
+        st = info["stamp_type_code"]
+        # 1=standard
+        if st == 1:
+            self.radio_standard.setChecked(True)
+        elif st in (2, 3, 4):
+            self.radio_copy_group.setChecked(True)
+            self.copy_combo.setEnabled(True)
+            self.copy_combo.setCurrentIndex(1)
+            # если дата есть — считаем, что "вступ. в з.с."
+            if info["stamp_date_ui"]:
+                self.copy_combo.setCurrentIndex(2)
+                self.date_input.setEnabled(True)
+                self.date_input.setText(info["stamp_date_ui"])
+            else:
+                self.copy_combo.setCurrentIndex(0)
+                self.date_input.setEnabled(False)
+                self.date_input.setText("")
 
     def get_clean_file_path(self):
         if self.page_fragment:
@@ -889,7 +975,7 @@ class FileDialog(QDialog):
             if file_path.lower().endswith('.pdf'):
                 if self.fit_in_a4.isChecked():
                     normalize_pdf_in_place(file_path)
-                file_path, pages, stamp = self.get_filepath_and_pages_for_sign(idx)
+                file_path, pages, stamp, _ = self.get_filepath_and_pages_for_sign(idx)
                 stamp_image = create_stamp_image(self.certificate_comboBox.currentText(),
                                                  self.certs_data[self.certificate_comboBox.currentText()], stamp)
                 if file_path and pages:
@@ -1047,18 +1133,20 @@ class FileDialog(QDialog):
                 stamp = 'copy'
         else:
             stamp = 'regular'
-        return file_path, pages, stamp
+        if widget.epos_applied:
+            is_epos = True
+        return file_path, pages, stamp, is_epos
 
     def sign_file(self, index):
         try:
             filepath_to_stamp = ''
-            file_path, pages, stamp = self.get_filepath_and_pages_for_sign(index)
+            file_path, pages, stamp, is_epos = self.get_filepath_and_pages_for_sign(index)
             print(f"Файл: {file_path}, Страницы: {pages}")
             custom_coords = self.current_session_stamps.get(file_path)
             backup_file = shutil.copy(file_path, file_path + '_bkp')
             if file_path.lower().endswith('.pdf') and (pages or custom_coords):
                 stamp_image_path = create_stamp_image(self.certificate_comboBox.currentText(), self.certs_data[self.certificate_comboBox.currentText()], stamp)
-                if not self.sign_original.isChecked():
+                if not self.sign_original.isChecked() or not is_epos:
                     filepath_to_stamp = os.path.join(os.path.dirname(file_path),
                                                      f'gf_{os.path.basename(file_path)}')
                     shutil.copy(file_path, filepath_to_stamp)
