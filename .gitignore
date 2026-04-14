@@ -11,3 +11,5 @@
 /rules.txt
 /dist_nuitka/
 /.venv/
+/console_errors.log
+/console_output.log

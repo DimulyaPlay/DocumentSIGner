@@ -1133,8 +1133,7 @@ class FileDialog(QDialog):
                 stamp = 'copy'
         else:
             stamp = 'regular'
-        if widget.epos_applied:
-            is_epos = True
+        is_epos = bool(getattr(widget, 'epos_applied', False) or getattr(widget, 'epos_info', None))
         return file_path, pages, stamp, is_epos
 
     def sign_file(self, index):
@@ -1146,9 +1145,8 @@ class FileDialog(QDialog):
             backup_file = shutil.copy(file_path, file_path + '_bkp')
             if file_path.lower().endswith('.pdf') and (pages or custom_coords):
                 stamp_image_path = create_stamp_image(self.certificate_comboBox.currentText(), self.certs_data[self.certificate_comboBox.currentText()], stamp)
-                if not self.sign_original.isChecked() or not is_epos:
-                    filepath_to_stamp = os.path.join(os.path.dirname(file_path),
-                                                     f'gf_{os.path.basename(file_path)}')
+                if not self.sign_original.isChecked() and not is_epos:
+                    filepath_to_stamp = os.path.join(os.path.dirname(file_path), f'gf_{os.path.basename(file_path)}')
                     shutil.copy(file_path, filepath_to_stamp)
                     _ = add_stamp(filepath_to_stamp, stamp_image_path, pages, custom_coords)
                 else:
