@@ -6,6 +6,7 @@ import traceback
 import subprocess
 import re
 import sys
+import locale
 import pypdfium2 as pdfium
 import tempfile
 from PyPDF2 import PdfReader, PdfWriter, PageObject, Transformation
@@ -95,17 +96,35 @@ def save_config():
 config = read_create_config(config_file)
 
 def get_console_encoding():
-    result = subprocess.run(['chcp'], capture_output=True, text=True, shell=True)
-    match = re.search(r'(\d+)', result.stdout)
+    try:
+        result = subprocess.run('chcp',
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT,
+                                shell=True,
+                                creationflags=subprocess.CREATE_NO_WINDOW)
+        output_raw = result.stdout or b''
+    except Exception:
+        return locale.getpreferredencoding(False) or 'cp866'
+
+    output = ''
+    for candidate_encoding in ('cp866', 'cp1251', locale.getpreferredencoding(False), 'utf-8'):
+        if not candidate_encoding:
+            continue
+        try:
+            output = output_raw.decode(candidate_encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    if not output:
+        output = output_raw.decode('cp866',
+                                   errors='ignore')
+
+    match = re.search(r'(\d+)',
+                      output)
     if match:
         codepage = int(match.group(1))
-        if codepage == 866:
-            return 'cp866'
-        elif codepage == 1251:
-            return 'cp1251'
-        else:
-            return 'utf-8'
-    return 'cp866'
+        return f'cp{codepage}'
+    return locale.getpreferredencoding(False) or 'cp866'
 
 
 def get_cert_data():

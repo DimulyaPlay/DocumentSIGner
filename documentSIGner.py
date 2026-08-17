@@ -9,7 +9,7 @@ import msvcrt
 import os
 import traceback
 
-# .venv\Scripts\pyinstaller.exe --windowed --noconfirm --contents-directory "." --icon "icons8-legal-document-64.ico" --add-data "icons8-legal-document-64.ico;." --add-data "35.gif;." --add-data "pdfcpu.exe;." --add-data "C:\Users\CourtUser\Documents\PyCharmProjects\universal_app_updater\dist\Update.exe;." --add-data "Update.cfg;." --add-data "dcs.png;." --add-data "dcs-copy-in-law.png;." --add-data "dcs-copy.png;." --add-data "dcs-copy-no-in-law.png;." documentSIGner.py
+# .venv\Scripts\pyinstaller.exe --windowed --noconfirm --noupx --contents-directory "." --icon "icons8-legal-document-64.ico" --add-data "icons8-legal-document-64.ico;." --add-data "35.gif;." --add-data "pdfcpu.exe;." --add-data "C:\Users\CourtUser\Documents\PyCharmProjects\universal_app_updater\dist\Update.exe;." --add-data "Update.cfg;." --add-data "dcs.png;." --add-data "dcs-copy-in-law.png;." --add-data "dcs-copy.png;." --add-data "dcs-copy-no-in-law.png;." documentSIGner.py
 
 version = 'Версия 2.8 Сборка 09022026'
 
