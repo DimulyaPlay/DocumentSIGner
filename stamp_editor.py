@@ -1,4 +1,8 @@
-from main_functions import *
+import pypdfium2 as pdfium
+from PySide2.QtCore import QPoint, QRect, QSize, Qt
+from PySide2.QtGui import QImage, QPainter, QPixmap
+from PySide2.QtWidgets import (QDialog, QFrame, QHBoxLayout, QMessageBox,
+                               QPushButton, QSlider, QVBoxLayout, QWidget)
 
 
 class PlaceImageStampOnA4(QDialog):
@@ -25,19 +29,21 @@ class PlaceImageStampOnA4(QDialog):
         self.current_process_idx = 0 if self.mode == 'multi' else None
 
         self.results = {}
-        self.temp_files = []
-
         self.initUI()
         self.setWindowModality(Qt.ApplicationModal)
 
     def parse_pages(self, pages):
         """Обработка входного параметра pages: может быть 'all', список, кортеж или число."""
         if pages == 'all':
-            return list(range(self.total_pages))
+            parsed_pages = list(range(self.total_pages))
         elif isinstance(pages, (list, tuple)):
-            return [p if p != -1 else self.total_pages - 1 for p in pages]
+            parsed_pages = [p if p != -1 else self.total_pages - 1 for p in pages]
         else:
-            return [pages if pages != -1 else self.total_pages - 1]
+            parsed_pages = [pages if pages != -1 else self.total_pages - 1]
+        if not parsed_pages or any(not isinstance(page, int) or page < 0 or page >= self.total_pages
+                                   for page in parsed_pages):
+            raise ValueError('Указаны некорректные страницы для размещения штампа')
+        return list(dict.fromkeys(parsed_pages))
 
     def initUI(self):
         self.setWindowTitle('Переместите штамп на нужное место')
@@ -110,17 +116,23 @@ class PlaceImageStampOnA4(QDialog):
         """Загружает страницу PDF через pypdfium2 и отображает в виджете."""
         print("requested render page:", page_idx)
         page = self.pdf_document[page_idx]
-        bitmap = page.render(scale=1.5)  # ~150dpi
-        image = bitmap.to_pil()
-        temp_path = f"temp_page_{page_idx}.png"
-        image.save(temp_path)
-        self.temp_files.append(temp_path)
+        bitmap = page.render(scale=1.0)
+        try:
+            image = bitmap.to_pil().convert('RGBA')
+            image_bytes = image.tobytes('raw', 'RGBA')
+            page_image = QImage(
+                image_bytes, image.width, image.height,
+                image.width * 4, QImage.Format_RGBA8888
+            ).copy()
+        finally:
+            bitmap.close()
+            page.close()
         if image.width > image.height:
             page_size = QSize(770, 543)
         else:
             page_size = QSize(543, 770)
         saved_state = self.results.get(page_idx, None)
-        self.stamp_widget.set_page(QPixmap.fromImage(temp_path), page_size, saved_state)
+        self.stamp_widget.set_page(QPixmap.fromImage(page_image), page_size, saved_state)
         self.page_frame.setFixedSize(page_size)
 
     # ---------------------- МНОГОСТРАНИЧНЫЙ РЕЖИМ ----------------------
@@ -217,9 +229,9 @@ class PlaceImageStampOnA4(QDialog):
             event.ignore()
 
     def cleanup(self):
-        for f in self.temp_files:
-            if os.path.exists(f):
-                os.remove(f)
+        if self.pdf_document is not None:
+            self.pdf_document.close()
+            self.pdf_document = None
 
     def accept(self):
         self.cleanup()
@@ -276,16 +288,11 @@ class ImageStampWidget(QWidget):
         self.current_scale = value / 100.0
         self.update_stamp()
     def get_state(self):
-        return {
-            'position': (self.stamp_pos.x(), self.stamp_pos.y()),
-            'scale': self.current_scale
-        }
-
-    def get_state(self):
         """Возвращает текущие позицию штампа и масштаб, чтобы потом пересчитать координаты."""
         return {
             'position': (self.stamp_pos.x(), self.stamp_pos.y()),
-            'scale': self.current_scale
+            'scale': self.current_scale,
+            'page_size': (self.width(), self.height()),
         }
 
     def paintEvent(self, event):

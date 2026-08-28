@@ -1,4 +1,5 @@
 import json
+import io
 import os
 import socket
 import shutil
@@ -7,56 +8,57 @@ import subprocess
 import re
 import sys
 import locale
-import pypdfium2 as pdfium
 import tempfile
-from PyPDF2 import PdfReader, PdfWriter, PageObject, Transformation
-from reportlab.lib.pagesizes import A4, landscape
+from functools import lru_cache
+from PyPDF2 import PageObject, PdfReader, PdfWriter, Transformation
+from PyPDF2.generic import ArrayObject, Fit, FloatObject, NameObject, RectangleObject
 from threading import Lock, Timer, Thread
 from reportlab.pdfgen import canvas
 import winreg as reg
-import winshell
-from win32com.client import Dispatch
-from PySide2.QtWidgets import (QApplication, QAbstractItemView, QAction, QDialog,
+from PySide2.QtWidgets import (QAbstractItemView, QAction, QDialog,
                                QMenu, QVBoxLayout, QListWidget, QTableWidget,
                                QTableWidgetItem, QListWidgetItem, QHBoxLayout,
                                QLabel, QRadioButton, QLineEdit, QPushButton,
                                QFileDialog, QWidget, QComboBox, QCheckBox, QMessageBox,
-                               QSlider, QButtonGroup, QFrame)
-from PySide2.QtCore import Qt, QThread, Signal, QRect, QSize, QLineF, QPoint, QTranslator, QLocale, QLibraryInfo, Slot
-from PySide2.QtGui import QIcon, QMovie, QPixmap, QPainter
+                               QButtonGroup, QFrame)
+from PySide2.QtCore import Qt, QThread, Signal
+from PySide2.QtGui import QIcon, QMovie
 from PIL import Image, ImageDraw, ImageFont
 from queue import Queue
 import fnmatch
 import time
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
-import zipfile
-import win32crypt
-import win32cryptcon
-config_folder = config_file = os.path.join(os.path.expanduser('~/Documents'), 'DocumentSIGner')
-if not os.path.exists(config_folder):
-    os.mkdir(config_folder)
-config_file = os.path.join(os.path.expanduser('~/Documents'), 'DocumentSIGner', 'config.json')
+config_folder = os.path.join(os.path.expanduser('~/Documents'), 'DocumentSIGner')
+os.makedirs(config_folder, exist_ok=True)
+config_file = os.path.join(config_folder, 'config.json')
 file_paths_queue = Queue()
 
-ALLOWED_EXTENTIONS = ('.blp', '.bmp', '.dib', '.bufr', '.cur', '.pcx', '.dcx', '.dds', '.ps', '.eps', '.fit',
+ALLOWED_EXTENSIONS = ('.blp', '.bmp', '.dib', '.bufr', '.cur', '.pcx', '.dcx', '.dds', '.ps', '.eps', '.fit',
                '.fits', '.fli', '.flc', '.fpx', '.ftc', '.ftu', '.gbr', '.gif', '.grib', '.h5', '.hdf',
                '.png', '.apng', '.jp2', '.j2k', '.jpc', '.jpf', '.jpx', '.j2c', '.icns', '.ico', '.im',
                '.iim', '.tif', '.tiff', '.jfif', '.jpe', '.jpg', '.jpeg', '.mic', '.mpg', '.mpeg', '.mpo',
                '.msp', '.palm', '.pcd', '.pxr', '.pbm', '.pgm', '.ppm', '.pnm', '.psd', '.bw',
                '.rgb', '.rgba', '.sgi', '.ras', '.tga', '.icb', '.vda', '.vst', '.webp', '.wmf', '.emf',
                '.xbm', '.xpm', '.doc', '.docx', '.pdf', '.docm', '.xlsm',
-               '.rtf', '.ods', '.odt', '.xlsx', '.xls', '.blp', '.bmp', '.dib', '.bufr', '.cur', '.pcx', '.dcx', '.dds', '.ps', '.eps', '.fit',
-                   '.fits', '.fli', '.flc', '.fpx', '.ftc', '.ftu', '.gbr', '.gif', '.grib', '.h5', '.hdf',
-                   '.png', '.apng', '.jp2', '.j2k', '.jpc', '.jpf', '.jpx', '.j2c', '.icns', '.ico', '.im',
-                   '.iim', '.tif', '.tiff', '.jfif', '.jpe', '.jpg', '.jpeg', '.mic', '.mpg', '.mpeg', '.mpo',
-                   '.msp', '.palm', '.pcd', '.pxr', '.pbm', '.pgm', '.ppm', '.pnm', '.psd', '.bw', '.rgb',
-                   '.rgba', '.sgi', '.ras', '.tga', '.icb', '.vda', '.vst', '.webp', '.wmf', '.emf', '.xbm',
-                   '.xpm', ".txt")
-serial_names = ('Серийный номер', 'Serial')
-sha1 = ('SHA1 отпечаток', 'SHA1 Hash')
-date_make = ('Выдан', 'Not valid before')
-date_exp = ('Истекает', 'Not valid after')
+               '.rtf', '.ods', '.odt', '.xlsx', '.xls', '.txt')
+# Совместимость со старыми внешними импортами с опечаткой.
+ALLOWED_EXTENTIONS = ALLOWED_EXTENSIONS
+
+
+def _write_json_atomic(path, value):
+    directory = os.path.dirname(path) or '.'
+    fd, temp_path = tempfile.mkstemp(prefix='.config-', suffix='.tmp', dir=directory)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as configfile:
+            json.dump(value, configfile, ensure_ascii=False, indent=4)
+        os.replace(temp_path, path)
+    except Exception:
+        try:
+            os.unlink(temp_path)
+        except FileNotFoundError:
+            pass
+        raise
 
 
 def read_create_config(config_path):
@@ -76,25 +78,25 @@ def read_create_config(config_path):
     configuration = default_configuration.copy()
     if os.path.exists(config_path):
         try:
-            with open(config_path, 'r') as configfile:
+            with open(config_path, 'r', encoding='utf-8') as configfile:
                 configuration_opened = json.load(configfile)
-                for k, v in configuration_opened.items():
-                    configuration[k] = v
+                if isinstance(configuration_opened, dict):
+                    configuration.update(configuration_opened)
         except Exception as e:
-            print(e)
-            os.remove(config_path)
-    with open(config_path, 'w') as configfile:
-        json.dump(configuration, configfile, indent=4)
+            print(f'Не удалось прочитать конфигурацию: {e}')
+    if not os.path.exists(config_path) or configuration != locals().get('configuration_opened'):
+        _write_json_atomic(config_path, configuration)
     return configuration
 
 
 def save_config():
-    with open(config_file, 'w') as configfile:
-        json.dump(config, configfile, indent=4)
+    _write_json_atomic(config_file, config)
 
 
 config = read_create_config(config_file)
 
+
+@lru_cache(maxsize=1)
 def get_console_encoding():
     try:
         result = subprocess.run('chcp',
@@ -127,12 +129,22 @@ def get_console_encoding():
     return locale.getpreferredencoding(False) or 'cp866'
 
 
-def get_cert_data():
-    SUBJECT_CN_RE = re.compile(r'(?:^|,\s*)CN=([^,]+)')
+SUBJECT_CN_RE = re.compile(r'(?:^|,\s*)CN=([^,]+)')
+_certificate_cache = {'loaded_at': 0.0, 'data': {}}
+_certificate_cache_lock = Lock()
+CERTIFICATE_CACHE_SECONDS = 30
+
+
+def get_cert_data(force_refresh=False):
+    with _certificate_cache_lock:
+        cache_age = time.monotonic() - _certificate_cache['loaded_at']
+        if not force_refresh and cache_age < CERTIFICATE_CACHE_SECONDS:
+            return _certificate_cache['data'].copy()
+
     encoding = get_console_encoding()
     cert_mgr_path = os.path.join(config['csp_path'], 'certmgr.exe')
+    certs_data = {}
     if os.path.exists(cert_mgr_path):
-        certs_data = {}
         try:
             result = subprocess.run(
                 [cert_mgr_path, '-list'],
@@ -166,14 +178,15 @@ def get_cert_data():
                     certs_data[candidate] = cert
         except subprocess.CalledProcessError as e:
             print(f"Ошибка выполнения команды: {e}")
-        return certs_data
-    else:
-        return {}
+    with _certificate_cache_lock:
+        _certificate_cache['loaded_at'] = time.monotonic()
+        _certificate_cache['data'] = certs_data
+    return certs_data.copy()
 
 
 def filter_inappropriate_files(file_paths):
     return [file_path for file_path in file_paths if
-     file_path.lower().endswith(ALLOWED_EXTENTIONS) and not os.path.basename(file_path).startswith(('~', "gf_"))]
+     file_path.lower().endswith(ALLOWED_EXTENSIONS) and not os.path.basename(file_path).startswith(('~', "gf_"))]
 
 
 def sign_document(s_source_file, cert_data):
@@ -280,83 +293,298 @@ def check_chosen_pages(chosen_pages_string):
     try:
         for part in chosen_pages_string.split(','):
             if '-' in part:
-                start, end = map(int, part.split('-'))
+                start, end = map(int, part.split('-', 1))
+                if start < 1 or end < 1:
+                    raise ValueError
                 if start > end:
                     start, end = end, start  # Переставляем местами, если диапазон введен в обратном порядке
                 pages.update(range(start - 1, end))  # Индексация с нуля
             else:
-                pages.add(int(part) - 1)  # Добавляем одиночные страницы, с учетом индексации с нуля
+                page = int(part)
+                if page < 1:
+                    raise ValueError
+                pages.add(page - 1)  # Добавляем одиночные страницы, с учетом индексации с нуля
     except ValueError:
         print("Invalid input format. Use numbers or ranges like '1-3, 5'.")
         return None
     return sorted(pages)
 
 
-def normalize_pdf_in_place(file_path: str):
-    exe_dir = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__))
-    pdfcpu_path = os.path.join(exe_dir, "pdfcpu.exe")
-    if not os.path.isfile(pdfcpu_path):
-        raise FileNotFoundError(f"pdfcpu.exe не найден по пути: {pdfcpu_path}")
-    output_path = os.path.join(os.path.dirname(file_path), "output_temp.pdf")
-    cmd = [
-        pdfcpu_path,
-        "resize",
-        "form:A4",
-        file_path,
-        output_path
-    ]
-    try:
-        result = subprocess.run(
-            cmd,
-            check=True,
-            creationflags=subprocess.CREATE_NO_WINDOW
+A4_PORTRAIT = (595.275590551, 841.88976378)
+PDF_POINT_ARRAY_KEYS = ('/QuadPoints', '/Vertices', '/L', '/CL')
+PDF_PAGE_REPLACED_KEYS = {
+    '/Contents', '/Resources', '/Annots', '/MediaBox', '/CropBox',
+    '/BleedBox', '/TrimBox', '/ArtBox', '/Rotate', '/UserUnit', '/VP'
+}
+
+
+def _page_is_a4(page, tolerance=2.0):
+    user_unit = float(page.user_unit)
+    width = float(page.mediabox.width) * user_unit
+    height = float(page.mediabox.height) * user_unit
+    a4_width, a4_height = A4_PORTRAIT
+    return (
+        abs(width - a4_width) <= tolerance and abs(height - a4_height) <= tolerance
+    ) or (
+        abs(width - a4_height) <= tolerance and abs(height - a4_width) <= tolerance
+    )
+
+
+def _rotation_to_content_transform(page):
+    rotation = int(page.rotation) % 360
+    if not rotation:
+        return None
+    media_box = page.mediabox
+    center_x = float(media_box.left + media_box.width / 2)
+    center_y = float(media_box.bottom + media_box.height / 2)
+    transform = Transformation().translate(-center_x, -center_y).rotate(-rotation)
+    corners = (
+        media_box.lower_left, media_box.upper_left,
+        media_box.upper_right, media_box.lower_right,
+    )
+    transformed = [transform.apply_on((float(point[0]), float(point[1]))) for point in corners]
+    return transform.translate(
+        -min(point[0] for point in transformed),
+        -min(point[1] for point in transformed),
+    )
+
+
+def _transform_flat_points(values, transform):
+    if not isinstance(values, ArrayObject) or len(values) % 2:
+        return
+    for index in range(0, len(values), 2):
+        x, y = transform.apply_on((float(values[index]), float(values[index + 1])))
+        values[index] = FloatObject(x)
+        values[index + 1] = FloatObject(y)
+
+
+def _transform_annotation_geometry(page, transform):
+    annotation_refs = page.get('/Annots')
+    if annotation_refs is None:
+        return
+    annotation_refs = annotation_refs.get_object()
+    if not isinstance(annotation_refs, ArrayObject):
+        return
+    for annotation_ref in annotation_refs:
+        annotation = annotation_ref.get_object()
+        rectangle = annotation.get('/Rect')
+        if isinstance(rectangle, ArrayObject) and len(rectangle) == 4:
+            left, bottom, right, top = (float(value) for value in rectangle)
+            corners = (
+                (left, bottom), (left, top), (right, top), (right, bottom)
+            )
+            transformed = [transform.apply_on(point) for point in corners]
+            annotation[NameObject('/Rect')] = RectangleObject((
+                min(point[0] for point in transformed),
+                min(point[1] for point in transformed),
+                max(point[0] for point in transformed),
+                max(point[1] for point in transformed),
+            ))
+        for key in PDF_POINT_ARRAY_KEYS:
+            _transform_flat_points(annotation.get(key), transform)
+        ink_lists = annotation.get('/InkList')
+        if isinstance(ink_lists, ArrayObject):
+            for ink_points in ink_lists:
+                _transform_flat_points(ink_points, transform)
+
+
+def _fit_page_to_a4(page, writer):
+    original_parent = page.get('/Parent')
+    rotation_transform = _rotation_to_content_transform(page)
+    if rotation_transform is not None:
+        _transform_annotation_geometry(page, rotation_transform)
+        page.transfer_rotation_to_content()
+
+    visible_box = RectangleObject(page.cropbox)
+    source_width = float(visible_box.width)
+    source_height = float(visible_box.height)
+    if source_width <= 0 or source_height <= 0:
+        raise ValueError('PDF содержит страницу с некорректным размером')
+
+    portrait_width, portrait_height = A4_PORTRAIT
+    if source_width > source_height:
+        target_width, target_height = portrait_height, portrait_width
+    else:
+        target_width, target_height = portrait_width, portrait_height
+    scale = min(target_width / source_width, target_height / source_height)
+    fitted_width = source_width * scale
+    fitted_height = source_height * scale
+    offset_x = (target_width - fitted_width) / 2
+    offset_y = (target_height - fitted_height) / 2
+    fit_transform = Transformation((
+        scale, 0, 0, scale,
+        offset_x - float(visible_box.left) * scale,
+        offset_y - float(visible_box.bottom) * scale,
+    ))
+    page.add_transformation(fit_transform)
+    _transform_annotation_geometry(page, fit_transform)
+
+    # merge_page clips by TrimBox. Point it at the transformed CropBox so that
+    # content hidden by the source PDF does not reappear in the A4 margins.
+    page.trimbox = RectangleObject((
+        offset_x, offset_y, offset_x + fitted_width, offset_y + fitted_height
+    ))
+    target_page = PageObject.create_blank_page(
+        pdf=page.pdf, width=target_width, height=target_height
+    )
+    target_page.merge_page(page)
+    # Content streams must be indirect PDF objects. add_page() normally performs
+    # this step, but here the existing page object is replaced in place so that
+    # outlines and AcroForm references keep pointing to the same page.
+    contents = target_page.get('/Contents')
+    if contents is not None and not hasattr(contents, 'idnum'):
+        target_page[NameObject('/Contents')] = writer._add_object(contents)
+
+    # Keep page-level features (parent tree, transitions, structure references),
+    # while geometry and content come from the normalized A4 page.
+    for key, value in page.items():
+        if key not in PDF_PAGE_REPLACED_KEYS and key not in target_page:
+            target_page[key] = value
+    if original_parent is not None:
+        target_page[NameObject('/Parent')] = original_parent
+    page.clear()
+    page.update(target_page)
+
+
+def _copy_pdf_outline(items, reader, writer, parent=None):
+    last_outline_item = None
+    for item in items:
+        if isinstance(item, list):
+            if last_outline_item is not None:
+                _copy_pdf_outline(item, reader, writer, parent=last_outline_item)
+            continue
+        page_number = reader.get_destination_page_number(item)
+        if page_number is None or page_number < 0:
+            last_outline_item = None
+            continue
+        fit = Fit(item.typ, tuple(item.dest_array[2:]))
+        color = item.color
+        if color is not None:
+            color = tuple(float(component) for component in color)
+        font_format = int(item.font_format or 0)
+        last_outline_item = writer.add_outline_item(
+            item.title,
+            page_number,
+            parent=parent,
+            color=color,
+            bold=bool(font_format & 2),
+            italic=bool(font_format & 1),
+            fit=fit,
         )
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"Ошибка при выполнении pdfcpu:\nSTDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}")
-    shutil.move(output_path, file_path)
+
+
+def _copy_pdf_catalog_features(reader, writer):
+    # PyPDF2 3.0.1's clone_document_from_reader copies pages but leaves
+    # _root_object detached from the catalog that writer.write() serializes.
+    # Clone all non-page catalog features into the actual output catalog.
+    source_catalog = reader.trailer['/Root'].get_object()
+    output_catalog = writer._root.get_object()
+    writer._root_object = output_catalog
+    for key, value in source_catalog.items():
+        if key in ('/Type', '/Pages', '/Outlines'):
+            continue
+        output_catalog[NameObject(key)] = value.clone(writer)
+
+
+def normalize_pdf_in_place(file_path: str):
+    reader = None
+    writer = None
+    output_path = None
+    try:
+        reader = PdfReader(file_path, strict=False)
+        if reader.is_encrypted and not reader.decrypt(''):
+            raise ValueError('Невозможно привести к A4 защищённый паролем PDF')
+        if not reader.pages:
+            raise ValueError('PDF не содержит страниц')
+        original_page_count = len(reader.pages)
+        pages_to_normalize = [index for index, page in enumerate(reader.pages) if not _page_is_a4(page)]
+        if not pages_to_normalize:
+            return False
+
+        writer = PdfWriter()
+        source_outline = reader.outline
+        writer.clone_document_from_reader(reader)
+        _copy_pdf_catalog_features(reader, writer)
+        if reader.metadata:
+            writer.add_metadata(reader.metadata)
+        for page_index in pages_to_normalize:
+            _fit_page_to_a4(writer.pages[page_index], writer)
+        if source_outline:
+            # clone_document_from_reader copies the catalog reference but not a
+            # writable outline tree. Rebuild it against the cloned page objects.
+            writer._root_object.pop('/Outlines', None)
+            _copy_pdf_outline(source_outline, reader, writer)
+
+        output_fd, output_path = tempfile.mkstemp(
+            prefix='.document-signer-', suffix='.pdf', dir=os.path.dirname(file_path) or '.'
+        )
+        with os.fdopen(output_fd, 'wb') as output_file:
+            writer.write(output_file)
+            output_file.flush()
+            os.fsync(output_file.fileno())
+        writer.close()
+        writer = None
+        reader.stream.close()
+        reader = None
+
+        validation_reader = PdfReader(output_path, strict=False)
+        try:
+            if len(validation_reader.pages) != original_page_count:
+                raise ValueError('После преобразования изменилось количество страниц PDF')
+            if not all(_page_is_a4(page) for page in validation_reader.pages):
+                raise ValueError('Проверка результата A4 не пройдена')
+        finally:
+            validation_reader.stream.close()
+        os.replace(output_path, file_path)
+        output_path = None
+        return True
+    finally:
+        if writer is not None:
+            writer.close()
+        if reader is not None and reader.stream:
+            reader.stream.close()
+        if output_path and os.path.exists(output_path):
+            os.unlink(output_path)
 
 
 def get_stamp_coords_for_filepath(file_path, pages, stamp_image):
     from stamp_editor import PlaceImageStampOnA4
     dialog = PlaceImageStampOnA4(file_path, pages, stamp_image)
     if dialog.exec_() == QDialog.Accepted:
-        dialog.pdf_document.close()
         results = {}
         pdf_reader = PdfReader(file_path)
         # Берём все данные, сохранённые в диалоге
         dialog_data = dialog.get_results()[file_path]
         print(dialog_data)
-        for page_idx, data in dialog_data.items():
-            if data is None:
-                results[page_idx] = None
-            page = pdf_reader.pages[page_idx]
-            real_width = float(page.mediabox.width)
-            real_height = float(page.mediabox.height)
-            # Коэффициенты масштабирования между «экранной» отрисовкой и реальным PDF-размером
-            page_image_w = dialog.page_frame.width()
-            page_image_h = dialog.page_frame.height()
-            scale_x = real_width / page_image_w
-            scale_y = real_height / page_image_h
-            # Позиция штампа в координатах PDF
-            disp_x, disp_y = data['position']  # позиция в координатах виджета
-            x = disp_x * scale_x
-            y = disp_y * scale_y
-            # Размер штампа в координатах PDF
-            # Штамп на экране = оригинальная ширина (в пикселях) * current_scale
-            disp_stamp_w = dialog.stamp_widget.stamp_original.width() * data['scale']
-            disp_stamp_h = dialog.stamp_widget.stamp_original.height() * data['scale']
-            w = disp_stamp_w * scale_x
-            h = disp_stamp_h * scale_y
-            results[page_idx] = (x, y, x + w, y + h)
-        pdf_reader.stream.close()  # безопасное закрытие файла
+        try:
+            for page_idx, data in dialog_data.items():
+                if data is None:
+                    results[page_idx] = None
+                    continue
+                page = pdf_reader.pages[page_idx]
+                real_width = float(page.mediabox.width)
+                real_height = float(page.mediabox.height)
+                page_image_w, page_image_h = data.get(
+                    'page_size', (dialog.page_frame.width(), dialog.page_frame.height())
+                )
+                scale_x = real_width / page_image_w
+                scale_y = real_height / page_image_h
+                disp_x, disp_y = data['position']
+                x = disp_x * scale_x
+                y = disp_y * scale_y
+                disp_stamp_w = dialog.stamp_widget.stamp_original.width() * data['scale']
+                disp_stamp_h = dialog.stamp_widget.stamp_original.height() * data['scale']
+                w = disp_stamp_w * scale_x
+                h = disp_stamp_h * scale_y
+                results[page_idx] = (x, y, x + w, y + h)
+        finally:
+            pdf_reader.stream.close()
         if results:
             print(results)
             return {file_path: results}
         else:
             return None
-    else:
-        dialog.pdf_document.close()
-        return None
+    return None
 
 
 def create_stamp_image(cert_name, cert_info, stamp='regular'):
@@ -436,7 +664,7 @@ def remove_from_context_menu():
         key_path = r'*\shell\DocumentSIGner'
         reg.DeleteKey(reg.HKEY_CLASSES_ROOT, key_path + r'\command')
         reg.DeleteKey(reg.HKEY_CLASSES_ROOT, key_path)
-    except:
+    except OSError:
         pass
     base_path = r'Software\Classes\*\shell\DocumentSIGner'
     try:
@@ -451,12 +679,12 @@ def remove_from_context_menu():
         return 0
 
 
-def add_stamp(pdf_path, stamp_path, pagelist, custom_coords={}):
+def add_stamp(pdf_path, stamp_path, pagelist, custom_coords=None):
+    custom_coords = custom_coords or {}
 
     def create_overlay_pdf_with_stamp(image_path, page_width, page_height, coords):
-        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".pdf")
-        os.close(tmp_fd)
-        c = canvas.Canvas(tmp_path, pagesize=(page_width, page_height))
+        overlay_stream = io.BytesIO()
+        c = canvas.Canvas(overlay_stream, pagesize=(page_width, page_height))
         x0, y0, x1, y1 = coords
         width = x1 - x0
         height = y1 - y0
@@ -464,11 +692,24 @@ def add_stamp(pdf_path, stamp_path, pagelist, custom_coords={}):
         c.drawImage(image_path, x0, y_rl, width=width, height=height, mask='auto')
         c.showPage()
         c.save()
-        return tmp_path
+        overlay_stream.seek(0)
+        return overlay_stream
 
+    temp_out = pdf_path + '.tmp'
+    overlay_streams = []
+    reader = None
+    writer = None
     try:
         reader = PdfReader(pdf_path)
         writer = PdfWriter()
+        source_outline = reader.outline
+        writer.clone_document_from_reader(reader)
+        _copy_pdf_catalog_features(reader, writer)
+        if reader.metadata:
+            writer.add_metadata(reader.metadata)
+        if source_outline:
+            writer._root_object.pop('/Outlines', None)
+            _copy_pdf_outline(source_outline, reader, writer)
         total_pages = len(reader.pages)
         if pagelist == 'all':
             pages_to_stamp = list(range(total_pages))
@@ -477,42 +718,150 @@ def add_stamp(pdf_path, stamp_path, pagelist, custom_coords={}):
         if custom_coords or config.get('stamp_place', 0) == 1:
             pages_to_stamp = [k for k in custom_coords.keys()]
         print('Добавление штампа на страницы', pages_to_stamp)
-        for idx, page in enumerate(reader.pages):
+        with Image.open(stamp_path) as stamp_image:
+            stamp_size = (stamp_image.width / 4.5, stamp_image.height / 4.5)
+        for idx, page in enumerate(writer.pages):
             if custom_coords and idx in custom_coords:
                 coords = custom_coords[idx]
                 if coords is None:
-                    writer.add_page(page)
                     continue
             elif idx in pages_to_stamp:
                 page_width = float(page.mediabox.width)
                 page_height = float(page.mediabox.height)
-                img = Image.open(stamp_path)
-                img_width = img.width / 4.5
-                img_height = img.height / 4.5
+                img_width, img_height = stamp_size
                 x0 = (page_width - img_width) / 2
                 y0 = page_height - img_height - 25
                 coords = (x0, y0, x0 + img_width, y0 + img_height)
             else:
-                writer.add_page(page)
                 continue
             page_width = float(page.mediabox.width)
             page_height = float(page.mediabox.height)
-            overlay_path = create_overlay_pdf_with_stamp(stamp_path, page_width, page_height, coords)
-            overlay_reader = PdfReader(overlay_path)
+            overlay_stream = create_overlay_pdf_with_stamp(stamp_path, page_width, page_height, coords)
+            # PyPDF2 resolves some merged objects only during writer.write(). Keep
+            # every in-memory overlay alive until the resulting PDF is serialized.
+            overlay_streams.append(overlay_stream)
+            overlay_reader = PdfReader(overlay_stream)
             page.merge_page(overlay_reader.pages[0])
-            os.remove(overlay_path)
-            writer.add_page(page)
-            overlay_reader.stream.close()
-        temp_out = pdf_path + '.tmp'
+            contents = page.get('/Contents')
+            if contents is not None and not hasattr(contents, 'idnum'):
+                page[NameObject('/Contents')] = writer._add_object(contents)
         with open(temp_out, 'wb') as f_out:
             writer.write(f_out)
-        reader.stream.close()
-        writer.close()
         os.replace(temp_out, pdf_path)
     except Exception as e:
         print(f"[!] Не удалось вставить штамп в {pdf_path}: {e}")
         traceback.print_exc()
+        raise
+    finally:
+        for overlay_stream in overlay_streams:
+            overlay_stream.close()
+        if os.path.exists(temp_out):
+            os.unlink(temp_out)
+        if reader and reader.stream:
+            reader.stream.close()
+        if writer:
+            writer.close()
     return pdf_path
+
+
+def parse_rule_line(rule):
+    """Возвращает четыре поля корректного правила или None для пустой/битой строки."""
+    parts = [part.strip() for part in rule.strip().split('|')]
+    return tuple(parts) if len(parts) == 4 else None
+
+
+def get_matching_destination(file_path, rules):
+    normalized_file = os.path.normcase(os.path.abspath(file_path))
+    filename = os.path.basename(normalized_file)
+    for rule in rules:
+        parsed = parse_rule_line(rule)
+        if not parsed:
+            continue
+        source_dir, patterns, destination, _ = parsed
+        normalized_source = os.path.normcase(os.path.abspath(source_dir))
+        try:
+            if os.path.commonpath((normalized_file, normalized_source)) != normalized_source:
+                continue
+        except ValueError:
+            continue
+        pattern_list = [pattern.strip().lower() for pattern in patterns.split(';') if pattern.strip()]
+        if pattern_list and all(fnmatch.fnmatch(filename.lower(), pattern) for pattern in pattern_list):
+            return os.path.abspath(destination)
+    return None
+
+
+def execute_sign_job(job):
+    """Подписывает один файл без обращения к Qt-виджетам (безопасно для QThread)."""
+    file_path = job['file_path']
+    stamped_copy = ''
+    signature_path = f'{file_path}.sig'
+    signature_existed = os.path.exists(signature_path)
+    backup_path = None
+    backup_ready = False
+    moved_paths = []
+    try:
+        backup_fd, backup_path = tempfile.mkstemp(
+            prefix=f'.{os.path.basename(file_path)}-', suffix='.bkp',
+            dir=os.path.dirname(file_path) or '.',
+        )
+        os.close(backup_fd)
+        shutil.copy2(file_path, backup_path)
+        backup_ready = True
+        pages = job['pages']
+        custom_coords = job['custom_coords']
+        if file_path.lower().endswith('.pdf') and (pages or custom_coords):
+            stamp_image_path = create_stamp_image(job['certificate_name'], job['certificate_data'], job['stamp'])
+            if not job['sign_original'] and not job['is_epos']:
+                stamped_copy = os.path.join(os.path.dirname(file_path), f'gf_{os.path.basename(file_path)}')
+                shutil.copy2(file_path, stamped_copy)
+                add_stamp(stamped_copy, stamp_image_path, pages, custom_coords)
+            else:
+                add_stamp(file_path, stamp_image_path, pages, custom_coords)
+
+        sign_path = sign_document(file_path, job['certificate_data'])
+        if not sign_path:
+            raise RuntimeError('Не удалось создать файл подписи')
+
+        new_file_path = file_path
+        destination = get_matching_destination(file_path, job['rules'])
+        if destination and os.path.normcase(os.path.abspath(os.path.dirname(file_path))) != os.path.normcase(destination):
+            if not os.path.isdir(destination):
+                raise FileNotFoundError(f'Папка назначения не найдена: {destination}')
+            for source in (file_path, sign_path, stamped_copy):
+                if not source:
+                    continue
+                target = os.path.join(destination, os.path.basename(source))
+                shutil.move(source, target)
+                moved_paths.append((source, target))
+            new_file_path = os.path.join(destination, os.path.basename(file_path))
+
+        os.unlink(backup_path)
+        return 0, '', file_path, new_file_path
+    except Exception as error:
+        rollback_errors = []
+        for source, target in reversed(moved_paths):
+            try:
+                if os.path.exists(target) and not os.path.exists(source):
+                    shutil.move(target, source)
+            except OSError as rollback_error:
+                rollback_errors.append(str(rollback_error))
+        try:
+            if backup_ready and backup_path and os.path.exists(backup_path):
+                os.replace(backup_path, file_path)
+            elif backup_path and os.path.exists(backup_path):
+                os.unlink(backup_path)
+        except OSError as rollback_error:
+            rollback_errors.append(str(rollback_error))
+        for generated_path in (stamped_copy, None if signature_existed else signature_path):
+            try:
+                if generated_path and os.path.exists(generated_path):
+                    os.unlink(generated_path)
+            except OSError as rollback_error:
+                rollback_errors.append(str(rollback_error))
+        message = str(error)
+        if rollback_errors:
+            message += f"; ошибки отката: {'; '.join(rollback_errors)}"
+        return 1, message, file_path, file_path
 
 
 def resource_path(relative_path):
@@ -524,21 +873,6 @@ def resource_path(relative_path):
         base_path = os.path.abspath(".")
 
     return os.path.join(base_path, relative_path)
-
-
-def handle_dropped_files(file_paths, dialog=None):
-    filtered_filepaths = []
-    for fp in file_paths:
-        fn = os.path.basename(fp)
-        if fp.lower().endswith(ALLOWED_EXTENTIONS) and not fn.startswith(('~', "gf_")):
-            filtered_filepaths.append(fp)
-    if filtered_filepaths:
-        dialog = FileDialog(filtered_filepaths)
-        dialog.show()
-        dialog.activateWindow()
-    else:
-        QMessageBox.information(None, 'Ошибка', "Поддерживаемые файлы не обнаружены")
-    return dialog
 
 
 _EPOS_RE = re.compile(
@@ -882,12 +1216,7 @@ class FileDialog(QDialog):
         self.setMaximumWidth(1900)
         self.setAcceptDrops(True)
         self.rules_file = os.path.join(config_folder, 'rules.txt')
-        # Загрузка и проверка файла по правилам из rules.txt
-        if os.path.exists(self.rules_file):
-            with open(self.rules_file, 'r') as file:
-                self.rules = file.readlines()
-        else:
-            self.rules = []
+        self.reload_rules()
         self.instruction_label = QLabel("Укажите страницы для размещения/тип штампа на документе (только для PDF), выберите сертификат из списка и нажмите 'Подписать'")
         font = self.instruction_label.font()
         font.setPointSize(10)
@@ -976,6 +1305,13 @@ class FileDialog(QDialog):
         else:
             event.ignore()
 
+    def reload_rules(self):
+        try:
+            with open(self.rules_file, 'r') as rules_file:
+                self.rules = rules_file.readlines()
+        except FileNotFoundError:
+            self.rules = []
+
     def dropEvent_custom(self, event):
         """Обработка события при отпускании объекта."""
         if event.mimeData().hasUrls():
@@ -1045,6 +1381,10 @@ class FileDialog(QDialog):
 
     def sign_all(self):
         self.current_session_stamps = {}
+        self.reload_rules()
+        if self.certificate_comboBox.currentText() not in self.certs_data:
+            QMessageBox.warning(self, 'Сертификат не выбран', 'Выберите доступный сертификат для подписи.')
+            return
         self.block_buttons(True)
         files_to_sign = self.get_file_indexes_for_sign(all=True)
         if not self.validate_file_existence(files_to_sign):
@@ -1056,12 +1396,17 @@ class FileDialog(QDialog):
         if config.get('stamp_place', 0) == 1:
             files_to_sign = self.get_file_indexes_for_sign(all=True)
             self.request_stamp_positions_from_user(files_to_sign)
-        self.thread = SignAllFilesThread(self)
+        jobs = [(index, self.build_sign_job(index)) for index in files_to_sign]
+        self.thread = SignAllFilesThread(jobs, self)
         self.thread.result.connect(self.on_sign_all_result)
         self.thread.start()
 
     def sign_chosen(self):
         self.current_session_stamps = {}
+        self.reload_rules()
+        if self.certificate_comboBox.currentText() not in self.certs_data:
+            QMessageBox.warning(self, 'Сертификат не выбран', 'Выберите доступный сертификат для подписи.')
+            return
         files_to_sign = self.get_file_indexes_for_sign()
         self.block_buttons(True)
         self.loading_label.show()
@@ -1075,7 +1420,8 @@ class FileDialog(QDialog):
         if config.get('stamp_place', 0) == 1:
             self.request_stamp_positions_from_user(files_to_sign)
         if files_to_sign:
-            self.thread = SignAllFilesThread(self, files_to_sign)
+            jobs = [(index, self.build_sign_job(index)) for index in files_to_sign]
+            self.thread = SignAllFilesThread(jobs, self)
             self.thread.result.connect(self.on_sign_all_result)
             self.thread.start()
         else:
@@ -1084,7 +1430,7 @@ class FileDialog(QDialog):
             self.loading_label.clear()
             self.block_buttons(False)
 
-    def on_sign_all_result(self, fuckuped_files, index_list_red, index_list_green):
+    def on_sign_all_result(self, failed_files, index_list_red, index_list_green, moved_files):
         try:
             self.movie.stop()
             self.loading_label.clear()
@@ -1092,20 +1438,27 @@ class FileDialog(QDialog):
             for idx in index_list_green:
                 item = self.file_list.item(idx)
                 widget = self.file_list.itemWidget(item)
+                if idx in moved_files:
+                    widget.file_path = moved_files[idx]
+                    widget.file_path_orig = moved_files[idx]
+                    widget.file_label.setToolTip(os.path.basename(moved_files[idx]))
                 widget.set_file_label_background("rgba(0, 128, 0, 128)")
-            if fuckuped_files:
+            if index_list_green:
+                config['last_cert'] = self.certificate_comboBox.currentText()
+                save_config()
+            if failed_files:
                 for idx in index_list_red:
                     item = self.file_list.item(idx)
                     widget = self.file_list.itemWidget(item)
                     widget.set_file_label_background("rgba(255, 0, 0, 128)")
-                msg_lst = [f'{os.path.basename(fp)}-{err}' for fp, err in fuckuped_files.items()]
+                msg_lst = [f'{os.path.basename(fp)} — {err}' for fp, err in failed_files.items()]
                 msg_str = '\n'.join(msg_lst)
                 QMessageBox.warning(self, 'Ошибка', f'Возникли ошибки со следующими документами:\n{msg_str}')
             else:
                 QMessageBox.information(self, 'Успех', 'Создание подписи завершено.')
             if self.tray_gui:
                 self.tray_gui.update_label_text()
-        except:
+        except Exception:
             traceback.print_exc()
 
     def block_buttons(self, block):
@@ -1155,61 +1508,20 @@ class FileDialog(QDialog):
         is_epos = bool(getattr(widget, 'epos_applied', False) or getattr(widget, 'epos_info', None))
         return file_path, pages, stamp, is_epos
 
-    def sign_file(self, index):
-        try:
-            filepath_to_stamp = ''
-            file_path, pages, stamp, is_epos = self.get_filepath_and_pages_for_sign(index)
-            print(f"Файл: {file_path}, Страницы: {pages}")
-            custom_coords = self.current_session_stamps.get(file_path)
-            backup_file = shutil.copy(file_path, file_path + '_bkp')
-            if file_path.lower().endswith('.pdf') and (pages or custom_coords):
-                stamp_image_path = create_stamp_image(self.certificate_comboBox.currentText(), self.certs_data[self.certificate_comboBox.currentText()], stamp)
-                if not self.sign_original.isChecked() and not is_epos:
-                    filepath_to_stamp = os.path.join(os.path.dirname(file_path), f'gf_{os.path.basename(file_path)}')
-                    shutil.copy(file_path, filepath_to_stamp)
-                    _ = add_stamp(filepath_to_stamp, stamp_image_path, pages, custom_coords)
-                else:
-                    add_stamp(file_path, stamp_image_path, pages, custom_coords)
-            sign_path = sign_document(file_path, self.certs_data[self.certificate_comboBox.currentText()])
-            if sign_path:
-                os.remove(backup_file)
-                for rule in self.rules:
-                    source_dir, patterns, dest_dir, _ = rule.strip().split('|')
-                    source_dir, patterns, dest_dir = source_dir.lower(), patterns, dest_dir.lower()
-                    if file_path.startswith(source_dir):
-                        patterns_list = patterns.split(';')
-                        all_patterns_match = True
-                        for pattern in patterns_list:
-                            if not fnmatch.fnmatch(os.path.basename(file_path), pattern):
-                                all_patterns_match = False
-                                break
-                        if all_patterns_match:
-                            if os.path.dirname(file_path) != os.path.abspath(dest_dir):
-                                new_file_path = os.path.join(dest_dir, os.path.basename(file_path))
-                                shutil.move(file_path, dest_dir)
-                                shutil.move(sign_path, dest_dir)
-                                item = self.file_list.item(index)
-                                widget = self.file_list.itemWidget(item)
-                                widget.file_path = new_file_path
-                                if filepath_to_stamp:
-                                    shutil.move(filepath_to_stamp, dest_dir)
-            else:
-                print(f'Не удалось подписать {file_path}')
-                if filepath_to_stamp and os.path.exists(filepath_to_stamp):
-                    os.unlink(filepath_to_stamp)
-                shutil.move(backup_file, file_path)
-                return 1, '', file_path
-        except PermissionError as e:
-            error_msg = f"Файл открыт где-то еще"
-            print(error_msg, file_path)
-            return 1, error_msg, file_path
-        except Exception as e:
-            print(f'Не удалось подписать: {e}')
-            traceback.print_exc()
-            return 1, e, file_path
-        config['last_cert'] = self.certificate_comboBox.currentText()
-        save_config()
-        return 0, '', file_path
+    def build_sign_job(self, index):
+        file_path, pages, stamp, is_epos = self.get_filepath_and_pages_for_sign(index)
+        certificate_name = self.certificate_comboBox.currentText()
+        return {
+            'file_path': file_path,
+            'pages': pages,
+            'stamp': stamp,
+            'is_epos': is_epos,
+            'custom_coords': self.current_session_stamps.get(file_path),
+            'certificate_name': certificate_name,
+            'certificate_data': self.certs_data[certificate_name].copy(),
+            'sign_original': self.sign_original.isChecked(),
+            'rules': tuple(self.rules),
+        }
 
     def append_new_file_to_list(self, file_path):
         item = QListWidgetItem(self.file_list)
@@ -1341,17 +1653,15 @@ class RulesDialog(QDialog):
 
 
 def send_file_path_to_existing_instance(file_paths):
-    attempts = 5
-    for attempt in range(attempts):
+    attempts = 10
+    for _ in range(attempts):
         try:
-            client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            client_socket.connect(('localhost', 65432))
-            data = '\n'.join(file_paths)  # 🔄 теперь это список строк, включая пути с пробелами
-            client_socket.sendall(data.encode('utf-8'))
-            client_socket.close()
+            with socket.create_connection(('localhost', 65432), timeout=0.5) as client_socket:
+                data = '\n'.join(file_paths)
+                client_socket.sendall(data.encode('utf-8'))
             return 1
-        except ConnectionRefusedError:
-            time.sleep(1)
+        except OSError:
+            time.sleep(0.2)
     return 0
 
 
@@ -1361,51 +1671,34 @@ class QueueMonitorThread(QThread):
         while True:
             file_path = file_paths_queue.get()
             if file_path is None:
+                file_paths_queue.task_done()
                 break
             self.file_path_signal.emit(file_path)
             file_paths_queue.task_done()
 
 
 class SignAllFilesThread(QThread):
-    result = Signal(dict, object, object)
+    result = Signal(dict, object, object, dict)
 
-    def __init__(self, parent=None, indexes=None):
+    def __init__(self, jobs, parent=None):
         super().__init__(parent)
-        self.indexes = indexes
+        self.jobs = jobs
 
     def run(self):
-        res_total = 0
-        fuckuped_files = {}
+        failed_files = {}
         redlist = []
         greenlist = []
-        file_index_list = self.indexes if self.indexes else range(self.parent().file_list.count())
-        for index in file_index_list:
-            res, err, fp = self.sign_file(index)
+        moved_files = {}
+        for index, job in self.jobs:
+            res, err, file_path, new_file_path = execute_sign_job(job)
             if res:
-                res_total += res
-                fuckuped_files[fp] = str(err)
+                failed_files[file_path] = str(err)
                 redlist.append(index)
             else:
                 greenlist.append(index)
-        self.result.emit(fuckuped_files, redlist, greenlist)
-
-    def sign_file(self, index):
-        return self.parent().sign_file(index)
-
-
-class SignFileThread(QThread):
-    result = Signal(bool, str, int)
-
-    def __init__(self, index, parent=None):
-        super().__init__(parent)
-        self.index = index
-
-    def run(self):
-        res, err, fp = self.sign_file(self.index)
-        self.result.emit(res, err, self.index)
-
-    def sign_file(self, index):
-        return self.parent().sign_file(index)
+                if new_file_path != file_path:
+                    moved_files[index] = new_file_path
+        self.result.emit(failed_files, redlist, greenlist, moved_files)
 
 
 class FileWatchHandler(FileSystemEventHandler):
@@ -1422,9 +1715,8 @@ class FileWatchHandler(FileSystemEventHandler):
 
     def process_file(self, fp):
         time.sleep(8)  # Ожидание, чтобы сигнатурный файл успел появиться
-        fn = os.path.basename(fp.lower())
-        fp = fp.lower()
-        if fp.endswith(ALLOWED_EXTENTIONS) and not fn.startswith(('~', "gf_")) and not os.path.exists(fp + '.sig') and not os.path.exists(fp + '..sig') and not os.path.exists(fp + '.1.sig'):
+        fn = os.path.basename(fp).lower()
+        if fp.lower().endswith(ALLOWED_EXTENSIONS) and not fn.startswith(('~', "gf_")) and not os.path.exists(fp + '.sig') and not os.path.exists(fp + '..sig') and not os.path.exists(fp + '.1.sig'):
             self.add_new_file(fp)
 
     def add_new_file(self, fp):
@@ -1453,27 +1745,33 @@ class FileWatcher:
         print(directory_to_watch)
         self.notify_callback = notify_callback
 
-    def run(self):
+    def start(self):
         event_handler = FileWatchHandler(self.notify_callback)
         self.observer.schedule(event_handler, self.directory_to_watch, recursive=False)
         self.observer.start()
 
+    def stop(self):
+        self.observer.stop()
+        if self.observer.is_alive():
+            self.observer.join(timeout=2)
+
 
 def update_updater():
     import configparser
-    config = configparser.ConfigParser()
-    config.read('update.cfg')
-    reference_folder = config['Settings']['reference_folder']
-    updater_files = ['update.exe', 'update.cfg']
-    for file in updater_files:
-        local_file_path = os.path.join(os.getcwd(), file)
-        reference_file_path = os.path.join(reference_folder, file)
-        if os.path.exists(reference_file_path) and os.path.exists(local_file_path):
-            if os.path.getmtime(reference_file_path) > os.path.getmtime(local_file_path):
-                shutil.copy2(reference_file_path, local_file_path)
-                print(f"Updated {file} to the latest version.")
-            else:
-                print(f'{file} is no need in updates')
+    updater_config = configparser.ConfigParser()
+    app_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+    updater_config.read(os.path.join(app_dir, 'Update.cfg'), encoding='utf-8')
+    reference_folder = updater_config.get('Settings', 'reference_folder', fallback='').strip()
+    if not reference_folder:
+        return
+    for filename in ('Update.exe', 'Update.cfg'):
+        local_file_path = os.path.join(app_dir, filename)
+        reference_file_path = os.path.join(reference_folder, filename)
+        if not os.path.isfile(reference_file_path):
+            continue
+        if not os.path.exists(local_file_path) or os.path.getmtime(reference_file_path) > os.path.getmtime(local_file_path):
+            shutil.copy2(reference_file_path, local_file_path)
+            print(f"Updated {filename} to the latest version.")
 
 
 def install_certificates():
@@ -1487,7 +1785,7 @@ def install_certificates():
     if not os.path.exists(cert_dir):
         try:
             os.mkdir(cert_dir)
-        except:
+        except OSError:
             print(f"Папка не найдена и не удалось создать: {cert_dir}")
             return
     cert_extensions = (".cer", ".crt", ".pem")
@@ -1504,5 +1802,5 @@ def install_certificates():
                 creationflags=subprocess.CREATE_NO_WINDOW
             )
             print(f"Сертификат установлен в CA: {cert_path}")
-        except subprocess.CalledProcessError as e:
-            pass
+        except subprocess.CalledProcessError as error:
+            print(f"Не удалось установить сертификат {cert_path}: {error}")

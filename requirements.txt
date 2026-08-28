@@ -1,0 +1,15 @@
+# DocumentSIGner dependencies for Windows 7 and CPython 3.8 (32-bit or 64-bit).
+# Keep Python 3.8: newer official CPython releases do not support Windows 7.
+
+PySide2==5.15.2.1
+PyPDF2==3.0.1
+Pillow==10.4.0
+pypdfium2==4.30.0
+reportlab==4.2.5
+watchdog==4.0.2
+
+# Required to build documentSIGner.exe from documentSIGner.spec.
+# setuptools 71+ breaks PyInstaller's pkg_resources hook on Python 3.8.
+setuptools==70.0.0
+PyInstaller==6.13.0
+pyinstaller-hooks-contrib==2025.4

@@ -1,17 +1,24 @@
 import sys
-import time
-from threading import Thread, Lock
+from threading import Event, Thread
 from PySide2.QtCore import QTranslator, QLocale, QLibraryInfo
 from PySide2 import QtWidgets, QtGui, QtCore
 import socket
-from main_functions import resource_path, decode_document, get_cert_data, toggle_startup_registry, filter_inappropriate_files, config_folder, update_updater, install_certificates, FileWatcher, add_to_context_menu, remove_from_context_menu, RulesDialog, config, save_config, send_file_path_to_existing_instance, file_paths_queue, QueueMonitorThread, FileDialog, handle_dropped_files
+from main_functions import (ALLOWED_EXTENSIONS, FileDialog, FileWatcher,
+                            QueueMonitorThread, RulesDialog, add_to_context_menu,
+                            config, config_folder, decode_document,
+                            file_paths_queue, filter_inappropriate_files,
+                            get_cert_data, install_certificates,
+                            parse_rule_line, remove_from_context_menu,
+                            resource_path, save_config,
+                            send_file_path_to_existing_instance,
+                            toggle_startup_registry, update_updater)
 import msvcrt
 import os
 import traceback
 
-# .venv\Scripts\pyinstaller.exe --windowed --noconfirm --noupx --contents-directory "." --icon "icons8-legal-document-64.ico" --add-data "icons8-legal-document-64.ico;." --add-data "35.gif;." --add-data "pdfcpu.exe;." --add-data "C:\Users\CourtUser\Documents\PyCharmProjects\universal_app_updater\dist\Update.exe;." --add-data "Update.cfg;." --add-data "dcs.png;." --add-data "dcs-copy-in-law.png;." --add-data "dcs-copy.png;." --add-data "dcs-copy-no-in-law.png;." documentSIGner.py
+# .venv\Scripts\pyinstaller.exe --windowed --noconfirm --noupx --contents-directory "." --icon "icons8-legal-document-64.ico" --add-data "icons8-legal-document-64.ico;." --add-data "35.gif;." --add-data "Update.exe;." --add-data "Update.cfg;." --add-data "dcs.png;." --add-data "dcs-copy-in-law.png;." --add-data "dcs-copy.png;." --add-data "dcs-copy-no-in-law.png;." documentSIGner.py
 
-version = 'Версия 2.8 Сборка 09022026'
+version = 'Версия 2.'
 
 
 def exception_hook(exc_type, exc_value, exc_traceback):
@@ -26,12 +33,17 @@ def exception_hook(exc_type, exc_value, exc_traceback):
 
 
 class SystemTrayGui(QtWidgets.QSystemTrayIcon):
+    notification_signal = QtCore.Signal(str)
+    files_scanned_signal = QtCore.Signal(object)
 
-    global qt_app
     def __init__(self, icon, parent=None):
         QtWidgets.QSystemTrayIcon.__init__(self, icon, parent)
         self.activated.connect(self.show_menu)
         self.notifiers = []
+        self.notification_signal.connect(self.notify_new_file)
+        self.files_scanned_signal.connect(self._on_files_scanned)
+        self._file_scan_running = False
+        self._open_dialog_after_scan = False
         self.dialog = FileDialog([], tray_gui=self)
         self.messageClicked.connect(self.show_menu)
         self.rules_file = os.path.join(config_folder, 'rules.txt')
@@ -130,6 +142,8 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.setContextMenu(menu)
         self.toggle_stamp_on_original.setChecked(config['stamp_on_original'])
         # Запуск сокет-сервера в отдельном потоке
+        self.socket_stop_event = Event()
+        self.server_socket = None
         self.socket_server_thread = Thread(target=self.run_socket_server, daemon=True)
         self.socket_server_thread.start()
         self.queue_thread = QueueMonitorThread()
@@ -149,9 +163,12 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.icon_timer.timeout.connect(self.update_label_text)
         self.icon_timer.start(30000)  # каждые 30 секунд
 
-    def update_label_text(self):
+    def update_label_text(self, files_for_sign=None):
+        if files_for_sign is None:
+            self.refresh_file_list()
+            return
         try:
-            number = len(self.get_list_for_sign())
+            number = len(files_for_sign)
             if number == self.last_icon_count:
                 return
             self.last_icon_count = number
@@ -172,6 +189,38 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
 
         except Exception as e:
             print("Ошибка обновления иконки с количеством:", e)
+
+    def refresh_file_list(self, open_dialog=False):
+        if open_dialog:
+            self._open_dialog_after_scan = True
+        if self._file_scan_running:
+            return
+        self._file_scan_running = True
+        Thread(target=self._scan_files, daemon=True).start()
+
+    def _scan_files(self):
+        self.files_scanned_signal.emit(self.get_list_for_sign())
+
+    def _on_files_scanned(self, files_for_sign):
+        self._file_scan_running = False
+        self.update_label_text(files_for_sign)
+        if not self._open_dialog_after_scan:
+            return
+        self._open_dialog_after_scan = False
+        if self.dialog.isVisible():
+            self.dialog.activateWindow()
+        elif files_for_sign:
+            for file_path in files_for_sign:
+                self.add_file_to_list(file_path)
+            self.dialog.show()
+            self.dialog.activateWindow()
+        else:
+            self.showMessage(
+                "Пусто",
+                "Документов на подпись не обнаружено.",
+                QtWidgets.QSystemTrayIcon.Information,
+                300
+            )
 
     def add_file_to_list(self, file_path):
         if file_path == 'activate':
@@ -205,28 +254,18 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.radio_copy_stamp.setChecked(stamp_type == 1)
 
     def show_menu(self, reason=QtWidgets.QSystemTrayIcon.Trigger):
-        self.update_label_text()
+        # Context-menu activation is handled by QSystemTrayIcon itself. Running a
+        # directory scan here delayed the native tray menu, especially on shares.
+        if reason != QtWidgets.QSystemTrayIcon.Trigger and reason != 'activate':
+            return
         self.dialog.fit_in_a4.setChecked(config['normalize_to_a4'])
         self.dialog.sign_original.setChecked(config['stamp_on_original'])
         try:
             if self.dialog.isVisible():
                 self.dialog.activateWindow()
                 return
-            if reason == QtWidgets.QSystemTrayIcon.Trigger or reason == 'activate':
-                file_list_for_sign = self.get_list_for_sign()
-                if file_list_for_sign:
-                    for fp in file_list_for_sign:
-                        self.add_file_to_list(fp)
-                    self.dialog.show()
-                    self.dialog.activateWindow()
-                else:
-                    self.showMessage(
-                        "Пусто",
-                        "Документов на подпись не обнаружено.",
-                        QtWidgets.QSystemTrayIcon.Information,
-                        300  # Время отображения уведомления в миллисекундах
-                    )
-        except:
+            self.refresh_file_list(open_dialog=True)
+        except Exception:
             traceback.print_exc()
 
     def get_list_for_sign(self):
@@ -238,40 +277,49 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
                     rules = file.readlines()
             else:
                 rules = []
+            certificate_data = None
+            seen_paths = set()
             for rule in rules:
-                source_dir, _, _, for_sign_dir = rule.strip().split('|')
+                parsed_rule = parse_rule_line(rule)
+                if not parsed_rule:
+                    continue
+                source_dir, _, _, for_sign_dir = parsed_rule
                 if not os.path.exists(source_dir):
                     continue
                 # print('checking dir', source_dir)
                 # Получение всех файлов в корневой директории
                 for file_name in os.listdir(source_dir):
-                    if file_name in ['Thumbs.db', "desktop.ini"] or for_sign_dir == 'нет' or file_name.startswith(('gf_', '~')):
+                    file_name_lower = file_name.lower()
+                    if file_name_lower in ('thumbs.db', 'desktop.ini') or for_sign_dir.casefold() == 'нет' or file_name_lower.startswith(('gf_', '~')):
                         continue
                     file_path = os.path.join(source_dir, file_name)
-                    if file_path in matching_files:
+                    normalized_path = os.path.normcase(os.path.abspath(file_path))
+                    if normalized_path in seen_paths:
                         continue
                     # Пропускаем файлы с окончанием .sig
-                    if file_name.endswith('.sig') or os.path.isdir(file_path):
+                    if file_name_lower.endswith('.sig') or os.path.isdir(file_path):
                         continue
                     # Пропускаем файлы, у которых есть копия с окончанием .sig
                     sig_file_path = file_path + '.sig'
                     if os.path.exists(sig_file_path):
                         continue
                     # --- если это .enc расшифровать и пропустить ---
-                    if file_name.endswith('.enc'):
-                        certs_data = get_cert_data()
-                        if config['last_cert'] and config['last_cert'] in certs_data:
-                            cert_data = certs_data[config['last_cert']]
+                    if file_name_lower.endswith('.enc'):
+                        if certificate_data is None:
+                            certs_data = get_cert_data()
+                            certificate_data = certs_data.get(config['last_cert'])
+                        if certificate_data:
                             try:
-                                decode_document(file_path, cert_data)  # просто создаём расшифрованный файл
-                            except:
-                                pass
+                                decode_document(file_path, certificate_data)
+                            except Exception:
+                                traceback.print_exc()
                         continue  # сам .enc в список не идёт
 
                     # --- обычные файлы ---
                     matching_files.append(file_path)
+                    seen_paths.add(normalized_path)
             return filter_inappropriate_files(matching_files)
-        except:
+        except Exception:
             traceback.print_exc()
             return []
 
@@ -326,26 +374,33 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
             self.create_notifiers()
             config['notify'] = True
         else:
-            self.notifiers = []
+            self.stop_notifiers()
             config['notify'] = False
         save_config()
 
     def create_notifiers(self):
-        self.notifiers = []  # Останавливаем предыдущие наблюдатели перед созданием новых
+        self.stop_notifiers()
         if os.path.exists(self.rules_file):
             with open(self.rules_file, 'r') as file:
                 rules = file.readlines()
         else:
             rules = []
         for rule in rules:
-            source_dir, _, _, for_sign_dir = rule.strip().split('|')
+            parsed_rule = parse_rule_line(rule)
+            if not parsed_rule:
+                continue
+            source_dir, _, _, for_sign_dir = parsed_rule
             if not os.path.exists(source_dir):
                 continue
-            if for_sign_dir == 'да':
-                watcher = FileWatcher(source_dir, self.notify_new_file)
-                thread = Thread(target=watcher.run, daemon=True)
-                thread.start()
-                self.notifiers.append((watcher, thread))
+            if for_sign_dir.casefold() == 'да':
+                watcher = FileWatcher(source_dir, self.notification_signal.emit)
+                watcher.start()
+                self.notifiers.append(watcher)
+
+    def stop_notifiers(self):
+        for watcher in self.notifiers:
+            watcher.stop()
+        self.notifiers.clear()
 
     def notify_new_file(self, fp):
         self.showMessage(
@@ -356,45 +411,61 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         )
 
     def run_socket_server(self):
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server_socket.bind(('localhost', 65432))
-        server_socket.listen()
-        while True:
-            conn, addr = server_socket.accept()
-            with conn:
-                data = b''
-                while True:
-                    chunk = conn.recv(1024)
-                    if not chunk:
-                        break
-                    data += chunk
-                if data:
-                    received = data.decode('utf-8')
-                    paths = received.strip().splitlines()
-                    from main_functions import ALLOWED_EXTENTIONS
-                    for file_path in paths:
-                        if (file_path.lower().endswith(ALLOWED_EXTENTIONS)
-                            and not os.path.basename(file_path).startswith(('~', 'gf_'))) or file_path == 'activate':
+        try:
+            self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.server_socket.settimeout(0.5)
+            self.server_socket.bind(('localhost', 65432))
+            self.server_socket.listen()
+            while not self.socket_stop_event.is_set():
+                try:
+                    conn, _ = self.server_socket.accept()
+                except socket.timeout:
+                    continue
+                except OSError:
+                    break
+                with conn:
+                    conn.settimeout(2)
+                    chunks = []
+                    total_size = 0
+                    while total_size < 1024 * 1024:
+                        try:
+                            chunk = conn.recv(4096)
+                        except socket.timeout:
+                            break
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        total_size += len(chunk)
+                    for file_path in b''.join(chunks).decode('utf-8', errors='replace').strip().splitlines():
+                        if file_path == 'activate' or (
+                            file_path.lower().endswith(ALLOWED_EXTENSIONS)
+                            and not os.path.basename(file_path).startswith(('~', 'gf_'))
+                        ):
                             file_paths_queue.put(file_path)
+        except OSError as error:
+            if not self.socket_stop_event.is_set():
+                print(f'Ошибка локального сокет-сервера: {error}')
+        finally:
+            if self.server_socket:
+                self.server_socket.close()
+                self.server_socket = None
 
     def exit(self):
-        if hasattr(self, 'notifiers'):
-            for watcher, thread in self.notifiers:
-                if hasattr(watcher, 'observer'):
-                    watcher.observer.stop()
-                    watcher.observer.join()
+        self.stop_notifiers()
 
         if hasattr(self, 'queue_thread'):
             file_paths_queue.put(None)  # Завершает QueueMonitorThread
             self.queue_thread.wait()
 
         if hasattr(self, 'socket_server_thread'):
-            # Нельзя завершить socket.accept() напрямую, но можно закрыть сокет, если сделать его self-свойством
+            self.socket_stop_event.set()
             try:
-                self.server_socket.close()
-            except:
+                if self.server_socket:
+                    self.server_socket.close()
+            except OSError:
                 pass
+            self.socket_server_thread.join(timeout=2)
 
         if first_instance:
             lock_file.close()
@@ -416,6 +487,7 @@ def main():
     tray_gui = SystemTrayGui(QtGui.QIcon(resource_path('icons8-legal-document-64.ico')))
     qt_app.tray_gui = tray_gui
     tray_gui.show()
+    Thread(target=run_startup_maintenance, daemon=True).start()
     tray_gui.showMessage(
         "Приложение запущено.",
         f"Нажмите на значок, чтобы открыть список документов на подпись",
@@ -423,6 +495,14 @@ def main():
         1000  # Время отображения уведомления в миллисекундах
     )
     sys.exit(qt_app.exec_())
+
+
+def run_startup_maintenance():
+    for maintenance_task in (update_updater, install_certificates):
+        try:
+            maintenance_task()
+        except Exception:
+            traceback.print_exc()
 
 
 if __name__ == '__main__':
@@ -433,7 +513,7 @@ if __name__ == '__main__':
         msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
         first_instance = True
         print('First instance')
-    except:
+    except OSError:
         first_instance = False
         print('NOT First instance')
     if not first_instance:
@@ -448,24 +528,15 @@ if __name__ == '__main__':
             if result:
                 sys.exit(0)
     else:
-        if getattr(sys, 'frozen', True) or '__compiled__' in globals():
+        if getattr(sys, 'frozen', False) or '__compiled__' in globals():
             exe_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
             log_out = os.path.join(exe_dir, 'console_output.log')
             log_err = os.path.join(exe_dir, 'console_errors.log')
             sys.stdout = open(log_out, 'a', buffering=1)
             sys.stderr = open(log_err, 'a', buffering=1)
-        try:
-            update_updater()
-        except Exception as e:
-            print(e)
-        try:
-            install_certificates()
-        except Exception as e:
-            print(e)
         if len(sys.argv) > 1:
             file_paths = sys.argv[1:]
-            from main_functions import ALLOWED_EXTENTIONS
-            if file_paths[0].lower().endswith(ALLOWED_EXTENTIONS) and not file_paths[0].startswith(('~', "gf_")):
+            if file_paths[0].lower().endswith(ALLOWED_EXTENSIONS) and not os.path.basename(file_paths[0]).startswith(('~', "gf_")):
                 file_paths_queue.put(file_paths[0])
         sys.excepthook = exception_hook
         main()
