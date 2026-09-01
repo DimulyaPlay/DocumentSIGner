@@ -18,7 +18,7 @@ import traceback
 
 # .venv\Scripts\pyinstaller.exe --windowed --noconfirm --noupx --contents-directory "." --icon "icons8-legal-document-64.ico" --add-data "icons8-legal-document-64.ico;." --add-data "35.gif;." --add-data "Update.exe;." --add-data "Update.cfg;." --add-data "dcs.png;." --add-data "dcs-copy-in-law.png;." --add-data "dcs-copy.png;." --add-data "dcs-copy-no-in-law.png;." documentSIGner.py
 
-version = 'Версия 2.9.1'
+version = 'Версия 2.9.2'
 
 
 def exception_hook(exc_type, exc_value, exc_traceback):

@@ -1,10 +1,12 @@
 import os
+import re
 import tempfile
 import unittest
 
 import pypdfium2 as pdfium
-from PyPDF2 import PdfReader, PdfWriter
-from PyPDF2.generic import AnnotationBuilder, NameObject, RectangleObject, TextStringObject
+from pypdf import PdfReader, PdfWriter
+from pypdf.annotations import FreeText
+from pypdf.generic import NameObject, RectangleObject, TextStringObject
 from reportlab.pdfgen import canvas
 
 from main_functions import A4_PORTRAIT, add_stamp, normalize_pdf_in_place
@@ -69,6 +71,35 @@ class PdfNormalizationTests(unittest.TestCase):
         finally:
             reader.stream.close()
 
+    def test_generated_coordinates_are_compact_for_legacy_adobe_reader(self):
+        path = self.path('legacy-reader.pdf')
+        pdf_canvas = canvas.Canvas(path, pagesize=(591.36, 837.12))
+        pdf_canvas.rect(20, 20, 100, 100)
+        pdf_canvas.save()
+
+        self.assertTrue(normalize_pdf_in_place(path))
+        reader = PdfReader(path, strict=True)
+        try:
+            page = reader.pages[0]
+            for box in (page.mediabox, page.cropbox, page.trimbox):
+                for value in box:
+                    fractional = repr(value).partition('.')[2]
+                    self.assertLessEqual(len(fractional), 5)
+
+            contents = page.raw_get('/Contents').get_object()
+            streams = contents if isinstance(contents, list) else [contents]
+            content_bytes = b'\n'.join(
+                stream.get_object().get_data() for stream in streams
+            )
+            numbers = re.findall(
+                rb'(?<![A-Za-z0-9])[-+]?(?:\d+\.\d+|\.\d+|\d+)(?![A-Za-z0-9])',
+                content_bytes,
+            )
+            self.assertTrue(numbers)
+            self.assertLessEqual(max(map(len, numbers)), 12)
+        finally:
+            reader.stream.close()
+
     def test_annotation_is_transformed_and_preserved(self):
         path = self.path('annotation.pdf')
         writer = PdfWriter()
@@ -76,7 +107,7 @@ class PdfNormalizationTests(unittest.TestCase):
         writer.pages[0].rotate(90)
         writer.add_annotation(
             0,
-            AnnotationBuilder.free_text('test', rect=(40, 80, 140, 180)),
+            FreeText(text='test', rect=(40, 80, 140, 180)),
         )
         with open(path, 'wb') as output_file:
             writer.write(output_file)

@@ -10,8 +10,8 @@ import sys
 import locale
 import tempfile
 from functools import lru_cache
-from PyPDF2 import PageObject, PdfReader, PdfWriter, Transformation
-from PyPDF2.generic import ArrayObject, Fit, FloatObject, NameObject, RectangleObject
+from pypdf import PageObject, PdfReader, PdfWriter, Transformation
+from pypdf.generic import ArrayObject, Fit, FloatObject, NameObject, RectangleObject
 from threading import Lock, Timer, Thread
 from reportlab.pdfgen import canvas
 import winreg as reg
@@ -311,11 +311,25 @@ def check_chosen_pages(chosen_pages_string):
 
 
 A4_PORTRAIT = (595.275590551, 841.88976378)
+PDF_COORDINATE_DECIMAL_PLACES = 5
 PDF_POINT_ARRAY_KEYS = ('/QuadPoints', '/Vertices', '/L', '/CL')
 PDF_PAGE_REPLACED_KEYS = {
     '/Contents', '/Resources', '/Annots', '/MediaBox', '/CropBox',
     '/BleedBox', '/TrimBox', '/ArtBox', '/Rotate', '/UserUnit', '/VP'
 }
+
+
+def _pdf_coordinate(value):
+    """Keep generated PDF geometry within legacy Acrobat numeric limits."""
+    return FloatObject(f'{float(value):.{PDF_COORDINATE_DECIMAL_PLACES}f}')
+
+
+def _pdf_rectangle(values):
+    return RectangleObject(tuple(_pdf_coordinate(value) for value in values))
+
+
+def _compact_transformation(transform):
+    return tuple(_pdf_coordinate(value) for value in transform.ctm)
 
 
 def _page_is_a4(page, tolerance=2.0):
@@ -354,8 +368,8 @@ def _transform_flat_points(values, transform):
         return
     for index in range(0, len(values), 2):
         x, y = transform.apply_on((float(values[index]), float(values[index + 1])))
-        values[index] = FloatObject(x)
-        values[index + 1] = FloatObject(y)
+        values[index] = _pdf_coordinate(x)
+        values[index + 1] = _pdf_coordinate(y)
 
 
 def _transform_annotation_geometry(page, transform):
@@ -374,7 +388,7 @@ def _transform_annotation_geometry(page, transform):
                 (left, bottom), (left, top), (right, top), (right, bottom)
             )
             transformed = [transform.apply_on(point) for point in corners]
-            annotation[NameObject('/Rect')] = RectangleObject((
+            annotation[NameObject('/Rect')] = _pdf_rectangle((
                 min(point[0] for point in transformed),
                 min(point[1] for point in transformed),
                 max(point[0] for point in transformed),
@@ -388,12 +402,35 @@ def _transform_annotation_geometry(page, transform):
                 _transform_flat_points(ink_points, transform)
 
 
+def _transfer_rotation_to_content(page, transform):
+    """Apply rotation while keeping coordinates safe for legacy PDF readers."""
+    page.rotation = 0
+    page.add_transformation(_compact_transformation(transform))
+    for box_name in ('/MediaBox', '/CropBox', '/BleedBox', '/TrimBox', '/ArtBox'):
+        if box_name not in page:
+            continue
+        box = RectangleObject(page[box_name])
+        corners = (
+            box.lower_left, box.upper_left, box.upper_right, box.lower_right,
+        )
+        transformed = [
+            transform.apply_on((float(point[0]), float(point[1])))
+            for point in corners
+        ]
+        page[NameObject(box_name)] = _pdf_rectangle((
+            min(point[0] for point in transformed),
+            min(point[1] for point in transformed),
+            max(point[0] for point in transformed),
+            max(point[1] for point in transformed),
+        ))
+
+
 def _fit_page_to_a4(page, writer):
     original_parent = page.get('/Parent')
     rotation_transform = _rotation_to_content_transform(page)
     if rotation_transform is not None:
         _transform_annotation_geometry(page, rotation_transform)
-        page.transfer_rotation_to_content()
+        _transfer_rotation_to_content(page, rotation_transform)
 
     visible_box = RectangleObject(page.cropbox)
     source_width = float(visible_box.width)
@@ -416,16 +453,18 @@ def _fit_page_to_a4(page, writer):
         offset_x - float(visible_box.left) * scale,
         offset_y - float(visible_box.bottom) * scale,
     ))
-    page.add_transformation(fit_transform)
+    page.add_transformation(_compact_transformation(fit_transform))
     _transform_annotation_geometry(page, fit_transform)
 
     # merge_page clips by TrimBox. Point it at the transformed CropBox so that
     # content hidden by the source PDF does not reappear in the A4 margins.
-    page.trimbox = RectangleObject((
+    page.trimbox = _pdf_rectangle((
         offset_x, offset_y, offset_x + fitted_width, offset_y + fitted_height
     ))
     target_page = PageObject.create_blank_page(
-        pdf=page.pdf, width=target_width, height=target_height
+        pdf=page.pdf,
+        width=_pdf_coordinate(target_width),
+        height=_pdf_coordinate(target_height),
     )
     target_page.merge_page(page)
     # Content streams must be indirect PDF objects. add_page() normally performs
@@ -474,12 +513,9 @@ def _copy_pdf_outline(items, reader, writer, parent=None):
 
 
 def _copy_pdf_catalog_features(reader, writer):
-    # PyPDF2 3.0.1's clone_document_from_reader copies pages but leaves
-    # _root_object detached from the catalog that writer.write() serializes.
-    # Clone all non-page catalog features into the actual output catalog.
+    # Preserve non-page catalog features in the actual output catalog.
     source_catalog = reader.trailer['/Root'].get_object()
-    output_catalog = writer._root.get_object()
-    writer._root_object = output_catalog
+    output_catalog = writer.root_object
     for key, value in source_catalog.items():
         if key in ('/Type', '/Pages', '/Outlines'):
             continue
@@ -737,7 +773,7 @@ def add_stamp(pdf_path, stamp_path, pagelist, custom_coords=None):
             page_width = float(page.mediabox.width)
             page_height = float(page.mediabox.height)
             overlay_stream = create_overlay_pdf_with_stamp(stamp_path, page_width, page_height, coords)
-            # PyPDF2 resolves some merged objects only during writer.write(). Keep
+            # pypdf resolves some merged objects only during writer.write(). Keep
             # every in-memory overlay alive until the resulting PDF is serialized.
             overlay_streams.append(overlay_stream)
             overlay_reader = PdfReader(overlay_stream)

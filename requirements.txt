@@ -2,7 +2,7 @@
 # Keep Python 3.8: newer official CPython releases do not support Windows 7.
 
 PySide2==5.15.2.1
-PyPDF2==3.0.1
+pypdf==5.9.0
 Pillow==10.4.0
 pypdfium2==4.30.0
 reportlab==4.2.5
