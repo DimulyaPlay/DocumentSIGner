@@ -161,6 +161,14 @@ class PdfNormalizationTests(unittest.TestCase):
             self.assertEqual('First page', reader.outline[0].title)
             self.assertEqual('ru-RU', reader.trailer['/Root']['/Lang'])
             self.assertIsNotNone(reader.pages[0].get_contents())
+            resources = reader.pages[0]['/Resources'].get_object()
+            for font_reference in resources.get('/Font', {}).get_object().values():
+                self.assertEqual('/Font', font_reference.get_object().get('/Type'))
+            for xobject_reference in resources.get('/XObject', {}).get_object().values():
+                self.assertIn(
+                    xobject_reference.get_object().get('/Subtype'),
+                    ('/Form', '/Image', '/PS'),
+                )
         finally:
             reader.stream.close()
 

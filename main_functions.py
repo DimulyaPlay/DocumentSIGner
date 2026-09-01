@@ -741,7 +741,13 @@ def add_stamp(pdf_path, stamp_path, pagelist, custom_coords=None):
             # every in-memory overlay alive until the resulting PDF is serialized.
             overlay_streams.append(overlay_stream)
             overlay_reader = PdfReader(overlay_stream)
-            page.merge_page(overlay_reader.pages[0])
+            # merge_page() does not import indirect objects from another PDF into
+            # an already populated writer. Without cloning, the overlay's resource
+            # references keep their original object numbers; in the output those
+            # numbers can point to unrelated objects (for example /Catalog instead
+            # of a Form XObject), producing a structurally invalid PDF.
+            overlay_page = overlay_reader.pages[0].clone(writer)
+            page.merge_page(overlay_page)
             contents = page.get('/Contents')
             if contents is not None and not hasattr(contents, 'idnum'):
                 page[NameObject('/Contents')] = writer._add_object(contents)
