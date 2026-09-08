@@ -29,6 +29,10 @@ import fnmatch
 import time
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+from signing_service import (get_active_certificates, get_active_provider_name,
+                             get_signing_mode, get_signing_mode_availability,
+                             initialize_signing, set_signing_mode,
+                             sign_with_active_provider)
 config_folder = os.path.join(os.path.expanduser('~/Documents'), 'DocumentSIGner')
 os.makedirs(config_folder, exist_ok=True)
 config_file = os.path.join(config_folder, 'config.json')
@@ -72,7 +76,12 @@ def read_create_config(config_path):
         'default_page': 2,
         'stamp_place': 1,
         'notify': False,
-        'normalize_to_a4': False
+        'normalize_to_a4': False,
+        'karma_enabled': True,
+        'karma_url': 'http://127.0.0.1:8080/',
+        'karma_module': 'capi',
+        'karma_timeout': 15.0,
+        'signing_mode': 'auto',
     }
 
     configuration = default_configuration.copy()
@@ -184,40 +193,51 @@ def get_cert_data(force_refresh=False):
     return certs_data.copy()
 
 
+def initialize_signing_system():
+    """Однократно выбирает провайдера подписи для текущего запуска."""
+    crypto_certificates = get_cert_data(force_refresh=True)
+    signer = initialize_signing(config, crypto_certificates)
+    effective_mode = get_signing_mode()
+    if config.get('signing_mode') != effective_mode:
+        config['signing_mode'] = effective_mode
+        save_config()
+    return signer
+
+
+def select_signing_mode(mode):
+    """Переключает средство подписи среди проверенных при старте."""
+    signer = set_signing_mode(mode)
+    config['signing_mode'] = get_signing_mode()
+    save_config()
+    return signer
+
+
+def get_signing_mode_state():
+    return get_signing_mode(), get_signing_mode_availability()
+
+
+def get_signing_certificates():
+    """Возвращает сертификаты выбранного при запуске провайдера."""
+    return get_active_certificates(get_cert_data())
+
+
 def filter_inappropriate_files(file_paths):
     return [file_path for file_path in file_paths if
      file_path.lower().endswith(ALLOWED_EXTENSIONS) and not os.path.basename(file_path).startswith(('~', "gf_"))]
 
 
 def sign_document(s_source_file, cert_data):
-    if s_source_file:
-        if os.path.exists(s_source_file):
-            command = [
-                config['csp_path']+'\\csptest.exe',
-                "-sfsign",
-                "-sign",
-                "-in",
-                s_source_file,
-                "-out",
-                f"{s_source_file}.sig",
-                "-my",
-                cert_data.get('SHA1 отпечаток', cert_data.get('SHA1 Hash','')),
-                "-add",
-                "-detached",
-            ]
-            result = subprocess.run(command, capture_output=True, text=True, encoding='cp866', creationflags=subprocess.CREATE_NO_WINDOW)
-            output = result.returncode
-            if output == 2148081675:
-                print('Не удалось найти закрытый ключ')
-                return 0
-            elif os.path.isfile(f"{s_source_file}.sig"):
-                return f"{s_source_file}.sig"
-            else:
-                print(result)
-                return 0
-        else:
-            print(f"Не удается найти исходный файл [{s_source_file}].")
-            return 0
+    if not s_source_file or not os.path.exists(s_source_file):
+        print(f"[SIGNING] Не удается найти исходный файл [{s_source_file}].", flush=True)
+        return 0
+    try:
+        return sign_with_active_provider(
+            s_source_file, cert_data, config, get_cert_data()
+        )
+    except Exception as error:
+        print('[SIGNING] Ошибка подписания через выбранный провайдер: '
+              f'{type(error).__name__}: {error}', flush=True)
+        raise
 
 
 def decode_document(s_source_file, cert_data):
@@ -1246,7 +1266,7 @@ class FileDialog(QDialog):
     def __init__(self, file_paths, tray_gui=None):
         super().__init__()
         self.current_session_stamps = {}
-        self.certs_data = get_cert_data()
+        self.certs_data = get_signing_certificates()
         self.tray_gui = tray_gui
         self.setWindowIcon(QIcon(resource_path('icons8-legal-document-64.ico')))
         self.certs_list = list(self.certs_data.keys())
@@ -1279,7 +1299,9 @@ class FileDialog(QDialog):
             self.append_new_file_to_list(file_path)
         self.layout.addWidget(self.file_list)
 
-        self.certificate_label = QLabel("Сертификат для подписи:")
+        self.certificate_label = QLabel(
+            "Сертификат для подписи ({}):".format(get_active_provider_name())
+        )
         self.certificate_label.setFont(font)
         self.layout.addWidget(self.certificate_label)
 
@@ -1332,8 +1354,30 @@ class FileDialog(QDialog):
         layout_buttons.addWidget(self.sign_button_chosen)
 
         self.layout.addLayout(layout_buttons)
-
         self.setLayout(self.layout)
+
+    def reload_signing_provider(self):
+        """Обновляет провайдера и его сертификаты после ручного переключения."""
+        previous_certificate = self.certificate_comboBox.currentText()
+        self.certs_data = get_signing_certificates()
+        self.certs_list = list(self.certs_data.keys())
+        self.certificate_label.setText(
+            "Сертификат для подписи ({}):".format(get_active_provider_name())
+        )
+        self.certificate_comboBox.clear()
+        if self.certs_list:
+            self.certificate_comboBox.addItems(self.certs_list)
+            preferred = (
+                previous_certificate
+                if previous_certificate in self.certs_list
+                else config.get('last_cert')
+            )
+            if preferred in self.certs_list:
+                self.certificate_comboBox.setCurrentText(preferred)
+            self.certificate_comboBox.setEnabled(True)
+        else:
+            self.certificate_comboBox.addItem('Не удалось найти сертификаты')
+            self.certificate_comboBox.setEnabled(False)
 
     def dragEnterEvent(self, event):
         """Обработка события при перетаскивании объекта."""

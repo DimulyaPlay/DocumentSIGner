@@ -8,8 +8,11 @@ from main_functions import (ALLOWED_EXTENSIONS, FileDialog, FileWatcher,
                             config, config_folder, decode_document,
                             file_paths_queue, filter_inappropriate_files,
                             get_cert_data, install_certificates,
+                            get_signing_mode_state,
+                            initialize_signing_system,
                             parse_rule_line, remove_from_context_menu,
                             resource_path, save_config,
+                            select_signing_mode,
                             send_file_path_to_existing_instance,
                             toggle_startup_registry, update_updater)
 import msvcrt
@@ -18,7 +21,7 @@ import traceback
 
 # .venv\Scripts\pyinstaller.exe --windowed --noconfirm --noupx --contents-directory "." --icon "icons8-legal-document-64.ico" --add-data "icons8-legal-document-64.ico;." --add-data "35.gif;." --add-data "Update.exe;." --add-data "Update.cfg;." --add-data "dcs.png;." --add-data "dcs-copy-in-law.png;." --add-data "dcs-copy.png;." --add-data "dcs-copy-no-in-law.png;." documentSIGner.py
 
-version = 'Версия 2.9.2'
+version = 'Версия 2.10.0'
 
 
 def exception_hook(exc_type, exc_value, exc_traceback):
@@ -49,6 +52,7 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.rules_file = os.path.join(config_folder, 'rules.txt')
         menu = QtWidgets.QMenu(parent)
         menu.addAction(version).setDisabled(True)
+
         self.toggle_stamp_on_original = menu.addAction("Штамп на оригинале")
         self.toggle_stamp_on_original.setCheckable(True)
         self.toggle_stamp_on_original.triggered.connect(self.toggle_stamp)
@@ -73,6 +77,36 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
 
         self.open_rules_window = menu.addAction("Меню правил")
         self.open_rules_window.triggered.connect(self.open_rules)
+
+        # Подменю выбора средства подписи оформлено так же, как остальные
+        # группы настроек ниже.
+        active_mode, available_modes = get_signing_mode_state()
+        self.signing_tool_menu = QtWidgets.QMenu("Средство подписи", menu)
+        self.radio_signing_auto = QtWidgets.QAction("Авто", self.signing_tool_menu)
+        self.radio_signing_auto.setCheckable(True)
+        self.radio_signing_auto.setChecked(active_mode == 'auto')
+        self.radio_signing_auto.triggered.connect(lambda: self.set_signing_tool('auto'))
+        self.radio_signing_karma = QtWidgets.QAction("Карма", self.signing_tool_menu)
+        self.radio_signing_karma.setCheckable(True)
+        self.radio_signing_karma.setChecked(active_mode == 'karma')
+        self.radio_signing_karma.setEnabled(available_modes.get('karma', False))
+        self.radio_signing_karma.triggered.connect(lambda: self.set_signing_tool('karma'))
+        self.radio_signing_cryptopro = QtWidgets.QAction("КриптоПро", self.signing_tool_menu)
+        self.radio_signing_cryptopro.setCheckable(True)
+        self.radio_signing_cryptopro.setChecked(active_mode == 'cryptopro')
+        self.radio_signing_cryptopro.setEnabled(available_modes.get('cryptopro', False))
+        self.radio_signing_cryptopro.triggered.connect(
+            lambda: self.set_signing_tool('cryptopro')
+        )
+        self.signing_tool_actions = {
+            'auto': self.radio_signing_auto,
+            'karma': self.radio_signing_karma,
+            'cryptopro': self.radio_signing_cryptopro,
+        }
+        self.signing_tool_menu.addAction(self.radio_signing_auto)
+        self.signing_tool_menu.addAction(self.radio_signing_karma)
+        self.signing_tool_menu.addAction(self.radio_signing_cryptopro)
+        menu.addMenu(self.signing_tool_menu)
 
         # Создаем подменю для "Страница штампа по умолчанию"
         self.default_page_menu = QtWidgets.QMenu("Стр. штампа по ум.", menu)
@@ -157,6 +191,22 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         if config['notify']:
             self.create_notifiers()
         toggle_startup_registry(config['autorun'])
+
+    def set_signing_tool(self, mode):
+        try:
+            select_signing_mode(mode)
+            self.dialog.reload_signing_provider()
+        except Exception as error:
+            current_mode, _ = get_signing_mode_state()
+            QtWidgets.QMessageBox.warning(
+                None,
+                "Средство подписи",
+                "Не удалось переключить средство подписи: {}".format(error),
+            )
+        else:
+            current_mode = mode
+        for action_mode, action in self.signing_tool_actions.items():
+            action.setChecked(action_mode == current_mode)
 
     def start_doc_count_monitor(self):
         self.icon_timer = QtCore.QTimer()
@@ -483,6 +533,7 @@ def main():
     translator.load("qtbase_" + locale, path)
     qt_app.installTranslator(translator)
     qt_app.setStyle(QtWidgets.QStyleFactory.create("Fusion"))
+    initialize_signing_system()
     global tray_gui
     tray_gui = SystemTrayGui(QtGui.QIcon(resource_path('icons8-legal-document-64.ico')))
     qt_app.tray_gui = tray_gui

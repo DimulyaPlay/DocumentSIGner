@@ -13,6 +13,7 @@
 /.venv/
 /console_errors.log
 /console_output.log
+/tmp/
 __pycache__/
 *.py[cod]
 /.codebase-memory
