@@ -1008,11 +1008,12 @@ class CustomListWidgetItem(QWidget):
     def __init__(self, file_path, file_id=None, name=None, sig_pages=None):
         super().__init__()
         self.stamp_date = ''
-        self.file_path = file_path.lower()
+        self.file_path = file_path
         self.file_path_orig = file_path
+        is_pdf = file_path.lower().endswith('.pdf')
         self.is_file_empty = os.path.isfile(file_path) and os.path.getsize(file_path) == 0
         self.gf_file_path = None
-        if self.file_path.endswith('.pdf'):
+        if is_pdf:
             # Получаем директорию и имя файла
             directory, filename = os.path.split(self.file_path)
             self.gf_file_path = os.path.join(directory, f"gf_{filename}")
@@ -1050,18 +1051,18 @@ class CustomListWidgetItem(QWidget):
         top_radio_layout.addWidget(QLabel('Страницы штампа: '))
         self.radio_none = QRadioButton("Нет")
         self.radio_none.setChecked(config.get('default_page', 2) == 0)
-        self.radio_none.setChecked(not self.file_path.endswith('.pdf'))
+        self.radio_none.setChecked(not is_pdf)
         self.radio_first = QRadioButton("Первая")
-        self.radio_first.setEnabled(self.file_path.endswith('.pdf'))
+        self.radio_first.setEnabled(is_pdf)
         self.radio_first.setChecked(config.get('default_page', 2) == 1)
         self.radio_last = QRadioButton("Последняя")
-        self.radio_last.setEnabled(self.file_path.endswith('.pdf'))
+        self.radio_last.setEnabled(is_pdf)
         self.radio_last.setChecked(config.get('default_page', 2) == 2)
         self.radio_all = QRadioButton("Все")
-        self.radio_all.setEnabled(self.file_path.endswith('.pdf'))
+        self.radio_all.setEnabled(is_pdf)
         self.radio_all.setChecked(config.get('default_page', 2) == 3)
         self.radio_custom = QRadioButton("")
-        self.radio_custom.setEnabled(self.file_path.endswith('.pdf'))
+        self.radio_custom.setEnabled(is_pdf)
         self.radio_custom.setMaximumWidth(20)
         top_radio_layout.addWidget(self.radio_none)
         top_radio_layout.addWidget(self.radio_first)
@@ -1071,7 +1072,7 @@ class CustomListWidgetItem(QWidget):
         # Поле для ввода своих страниц
         self.custom_pages = QLineEdit()
         self.custom_pages.setPlaceholderText("Введите страницы")
-        self.custom_pages.setEnabled(self.file_path.endswith('.pdf'))
+        self.custom_pages.setEnabled(is_pdf)
         self.custom_pages.textEdited.connect(lambda: self.radio_custom.setChecked(True))
         self.custom_pages.editingFinished.connect(self.validate_pages_input)
         self.custom_pages.setFixedWidth(115)  # Фиксированная ширина
@@ -1092,9 +1093,9 @@ class CustomListWidgetItem(QWidget):
         # Радио-кнопки
         self.stamp_radio_group = QButtonGroup(self)
         self.radio_standard = QRadioButton("Обычный")
-        self.radio_standard.setEnabled(self.file_path.endswith('.pdf'))
+        self.radio_standard.setEnabled(is_pdf)
         self.radio_copy_group = QRadioButton("Копия верна")
-        self.radio_copy_group.setEnabled(self.file_path.endswith('.pdf'))
+        self.radio_copy_group.setEnabled(is_pdf)
 
         self.stamp_radio_group.addButton(self.radio_standard)
         self.stamp_radio_group.addButton(self.radio_copy_group)
@@ -1240,7 +1241,7 @@ class CustomListWidgetItem(QWidget):
         self.chb.setChecked(True)
         # --- страницы штампа ---
         pm = info["stamp_page_mode_code"]
-        if not self.file_path.endswith('.pdf'):
+        if not self.file_path.lower().endswith('.pdf'):
             self.radio_none.setChecked(True)
         else:
             if pm == 0:
