@@ -96,6 +96,63 @@ class SigningServiceTests(unittest.TestCase):
                 'errorMessage': 'The operation was canceled by the user.',
             })
 
+    def test_timestamp_url_is_read_from_standard_karma_settings(self):
+        with tempfile.TemporaryDirectory() as appdata:
+            settings_path = os.path.join(
+                appdata, signing_service.KARMA_CONTEXT_SETTINGS_RELATIVE_PATH
+            )
+            os.makedirs(os.path.dirname(settings_path))
+            with open(settings_path, 'w', encoding='utf-8-sig') as settings:
+                settings.write(
+                    '<?xml version="1.0" encoding="utf-8"?>'
+                    '<carma_context_menu_handler_settings '
+                    'timestamp_server_address="http://tsa.example/TSP/tsp.srf" />'
+                )
+            with mock.patch.dict(os.environ, {'APPDATA': appdata}):
+                self.assertEqual(
+                    'http://tsa.example/TSP/tsp.srf',
+                    signing_service.read_karma_timestamp_url(),
+                )
+                self.assertEqual(
+                    'MODULE="capi";TSP_URL="http://tsa.example/TSP/tsp.srf";',
+                    signing_service.build_karma_init_params('capi'),
+                )
+
+    def test_invalid_or_missing_karma_settings_do_not_block_signing(self):
+        with tempfile.TemporaryDirectory() as appdata:
+            with mock.patch.dict(os.environ, {'APPDATA': appdata}):
+                self.assertEqual('', signing_service.read_karma_timestamp_url())
+                self.assertEqual(
+                    'MODULE="capi";', signing_service.build_karma_init_params('capi')
+                )
+
+    @mock.patch('signing_service.KarmaSigner.probe')
+    def test_startup_passes_standard_timestamp_url_to_karma(self, karma_probe):
+        captured = {}
+
+        def probe(client, _certificates):
+            captured['init_params'] = client.init_params
+            return mock.Mock(provider_name='КАРМА', certificates={'K': {}})
+
+        karma_probe.side_effect = probe
+        with tempfile.TemporaryDirectory() as appdata:
+            settings_path = os.path.join(
+                appdata, signing_service.KARMA_CONTEXT_SETTINGS_RELATIVE_PATH
+            )
+            os.makedirs(os.path.dirname(settings_path))
+            with open(settings_path, 'w', encoding='utf-8') as settings:
+                settings.write(
+                    '<carma_context_menu_handler_settings '
+                    'timestamp_server_address="https://tsa.example/stamp" />'
+                )
+            with mock.patch.dict(os.environ, {'APPDATA': appdata}):
+                signing_service.initialize_signing({'csp_path': 'missing'}, {})
+
+        self.assertEqual(
+            'MODULE="capi";TSP_URL="https://tsa.example/stamp";',
+            captured['init_params'],
+        )
+
     @mock.patch('signing_service.KarmaSigner.probe')
     def test_startup_chooses_karma_without_tsa_probe(self, karma_probe):
         expected = mock.Mock(provider_name='КАРМА', certificates={'K': {}})

@@ -2,6 +2,7 @@ import os
 import re
 import tempfile
 import unittest
+from unittest import mock
 
 import pypdfium2 as pdfium
 from pypdf import PdfReader, PdfWriter
@@ -9,7 +10,9 @@ from pypdf.annotations import FreeText
 from pypdf.generic import NameObject, RectangleObject, TextStringObject
 from reportlab.pdfgen import canvas
 
-from main_functions import A4_PORTRAIT, add_stamp, normalize_pdf_in_place
+import main_functions
+from main_functions import (A4_PORTRAIT, add_stamp, execute_sign_job,
+                            get_stamp_coords_for_preview, normalize_pdf_in_place)
 
 
 class PdfNormalizationTests(unittest.TestCase):
@@ -200,6 +203,76 @@ class PdfNormalizationTests(unittest.TestCase):
                     xobject_reference.get_object().get('/Subtype'),
                     ('/Form', '/Image', '/PS'),
                 )
+        finally:
+            reader.stream.close()
+
+    def test_a4_preview_uses_temporary_copy_and_preserves_original(self):
+        path = self.path('signed-original.pdf')
+        self.write_blank_pdf(path, [(400, 900, 0)])
+        with open(path, 'rb') as source_file:
+            original = source_file.read()
+        preview_paths = []
+
+        def fake_editor(preview_path, _pages, _stamp_image):
+            preview_paths.append(preview_path)
+            reader = PdfReader(preview_path)
+            try:
+                self.assertTrue(all(main_functions._page_is_a4(page) for page in reader.pages))
+            finally:
+                reader.stream.close()
+            return {preview_path: {0: (10, 20, 110, 70)}}
+
+        with mock.patch(
+            'main_functions.get_stamp_coords_for_filepath', side_effect=fake_editor
+        ):
+            result = get_stamp_coords_for_preview(
+                path, [0], 'stamp.png', normalize_to_a4=True
+            )
+
+        self.assertEqual({path: {0: (10, 20, 110, 70)}}, result)
+        self.assertEqual(1, len(preview_paths))
+        self.assertNotEqual(path, preview_paths[0])
+        self.assertFalse(os.path.exists(preview_paths[0]))
+        with open(path, 'rb') as source_file:
+            self.assertEqual(original, source_file.read())
+
+    def test_clean_original_mode_normalizes_only_gf_copy(self):
+        path = self.path('existing-signature.pdf')
+        self.write_blank_pdf(path, [(400, 900, 0)])
+        with open(path, 'rb') as source_file:
+            original = source_file.read()
+
+        def fake_sign(source_path, _certificate_data):
+            signature_path = source_path + '.sig'
+            with open(signature_path, 'wb') as signature:
+                signature.write(b'test signature')
+            return signature_path
+
+        job = {
+            'file_path': path,
+            'pages': [0],
+            'stamp': 'regular',
+            'is_epos': False,
+            'custom_coords': {0: (10, 20, 110, 70)},
+            'certificate_name': 'Test certificate',
+            'certificate_data': {},
+            'sign_original': False,
+            'normalize_to_a4': True,
+            'rules': (),
+        }
+        stamp_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'dcs.png')
+        with mock.patch('main_functions.create_stamp_image', return_value=stamp_path), \
+                mock.patch('main_functions.sign_document', side_effect=fake_sign):
+            status, message, _, _ = execute_sign_job(job)
+
+        self.assertEqual((0, ''), (status, message))
+        with open(path, 'rb') as source_file:
+            self.assertEqual(original, source_file.read())
+        stamped_copy = self.path('gf_existing-signature.pdf')
+        self.assertTrue(os.path.exists(stamped_copy))
+        reader = PdfReader(stamped_copy)
+        try:
+            self.assertTrue(all(main_functions._page_is_a4(page) for page in reader.pages))
         finally:
             reader.stream.close()
 

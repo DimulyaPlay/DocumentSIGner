@@ -8,6 +8,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import xml.etree.ElementTree as ElementTree
 
 
 CURRENT_USER_MY_STORE = {
@@ -15,6 +16,12 @@ CURRENT_USER_MY_STORE = {
     'address': '',
     'name': 'MY',
 }
+
+KARMA_CONTEXT_SETTINGS_RELATIVE_PATH = os.path.join(
+    'CARMA',
+    'Context menu handler settings',
+    'CARMAContextMenuHandlerSettings.dat',
+)
 
 
 class SigningError(RuntimeError):
@@ -40,6 +47,41 @@ def _certificate_thumbprint(certificate_data):
     return _normalise_thumbprint(
         certificate_data.get('SHA1 отпечаток', certificate_data.get('SHA1 Hash', ''))
     )
+
+
+def get_karma_context_settings_path():
+    appdata = os.environ.get('APPDATA')
+    if not appdata:
+        appdata = os.path.join(os.path.expanduser('~'), 'AppData', 'Roaming')
+    return os.path.join(appdata, KARMA_CONTEXT_SETTINGS_RELATIVE_PATH)
+
+
+def read_karma_timestamp_url(settings_path=None):
+    """Читает TSA URL из штатного файла настроек обработчика КАРМЫ."""
+    path = settings_path or get_karma_context_settings_path()
+    try:
+        root = ElementTree.parse(path).getroot()
+    except (OSError, ElementTree.ParseError):
+        return ''
+
+    url = (root.attrib.get('timestamp_server_address') or '').strip()
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except ValueError:
+        return ''
+    if parsed.scheme.casefold() not in ('http', 'https') or not parsed.netloc:
+        return ''
+    if any(character in url for character in ('"', '\r', '\n')):
+        return ''
+    return url
+
+
+def build_karma_init_params(module):
+    params = ['MODULE="{}";'.format(module)]
+    timestamp_url = read_karma_timestamp_url()
+    if timestamp_url:
+        params.append('TSP_URL="{}";'.format(timestamp_url))
+    return ''.join(params)
 
 
 def _is_karma_cancellation(code, message):
@@ -347,9 +389,7 @@ def initialize_signing(config, crypto_certificates):
     karma_url = config.get('karma_url', 'http://127.0.0.1:8080/')
     karma_module = config.get('karma_module', 'capi')
     karma_timeout = float(config.get('karma_timeout', 15.0))
-    # Адрес TSA и параметры расширения настраиваются в самой КАРМЕ.
-    # Приложению достаточно выбрать криптографический модуль.
-    init_params = 'MODULE="{}";'.format(karma_module)
+    init_params = build_karma_init_params(karma_module)
     client = KarmaHttpClient(karma_url, karma_module, karma_timeout, init_params)
 
     karma_signer = None

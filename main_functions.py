@@ -638,6 +638,31 @@ def get_stamp_coords_for_filepath(file_path, pages, stamp_image):
         if results:
             print(results)
             return {file_path: results}
+
+
+def get_stamp_coords_for_preview(file_path, pages, stamp_image, normalize_to_a4=False):
+    """Показывает редактор на временной A4-копии, не изменяя исходный PDF."""
+    if not normalize_to_a4:
+        return get_stamp_coords_for_filepath(file_path, pages, stamp_image)
+
+    preview_fd, preview_path = tempfile.mkstemp(
+        prefix='.document-signer-preview-',
+        suffix='.pdf',
+        dir=os.path.dirname(file_path) or '.',
+    )
+    os.close(preview_fd)
+    try:
+        shutil.copy2(file_path, preview_path)
+        normalize_pdf_in_place(preview_path)
+        preview_result = get_stamp_coords_for_filepath(
+            preview_path, pages, stamp_image
+        )
+        if not preview_result or not preview_result.get(preview_path):
+            return None
+        return {file_path: preview_result[preview_path]}
+    finally:
+        if os.path.exists(preview_path):
+            os.unlink(preview_path)
         else:
             return None
     return None
@@ -876,8 +901,12 @@ def execute_sign_job(job):
             if not job['sign_original'] and not job['is_epos']:
                 stamped_copy = os.path.join(os.path.dirname(file_path), f'gf_{os.path.basename(file_path)}')
                 shutil.copy2(file_path, stamped_copy)
+                if job.get('normalize_to_a4', False):
+                    normalize_pdf_in_place(stamped_copy)
                 add_stamp(stamped_copy, stamp_image_path, pages, custom_coords)
             else:
+                if job.get('normalize_to_a4', False):
+                    normalize_pdf_in_place(file_path)
                 add_stamp(file_path, stamp_image_path, pages, custom_coords)
 
         sign_path = sign_document(file_path, job['certificate_data'])
@@ -1414,13 +1443,16 @@ class FileDialog(QDialog):
             widget = self.file_list.itemWidget(item)
             file_path = widget.file_path
             if file_path.lower().endswith('.pdf'):
-                if self.fit_in_a4.isChecked():
-                    normalize_pdf_in_place(file_path)
                 file_path, pages, stamp, _ = self.get_filepath_and_pages_for_sign(idx)
                 stamp_image = create_stamp_image(self.certificate_comboBox.currentText(),
                                                  self.certs_data[self.certificate_comboBox.currentText()], stamp)
                 if file_path and pages:
-                    file_path_coords = get_stamp_coords_for_filepath(file_path, pages, stamp_image)
+                    file_path_coords = get_stamp_coords_for_preview(
+                        file_path,
+                        pages,
+                        stamp_image,
+                        normalize_to_a4=self.fit_in_a4.isChecked(),
+                    )
                     if file_path_coords and file_path_coords.get(file_path):  # убедимся, что есть хоть одна страница
                         self.current_session_stamps.update(file_path_coords)
                     else:
@@ -1606,6 +1638,7 @@ class FileDialog(QDialog):
             'certificate_name': certificate_name,
             'certificate_data': self.certs_data[certificate_name].copy(),
             'sign_original': self.sign_original.isChecked(),
+            'normalize_to_a4': self.fit_in_a4.isChecked(),
             'rules': tuple(self.rules),
         }
 
