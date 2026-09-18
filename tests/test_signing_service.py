@@ -9,6 +9,7 @@ import signing_service
 
 class FakeKarmaClient:
     base_url = 'http://127.0.0.1:8080/'
+    operation_timeout = 300.0
 
     def __init__(self, raw_certificate):
         self.raw_certificate = raw_certificate
@@ -68,6 +69,9 @@ class SigningServiceTests(unittest.TestCase):
             with open(target, 'rb') as stream:
                 self.assertEqual(b'cms-signature', stream.read())
         self.assertEqual([27, 29], [mode for mode, _ in client.calls])
+        self.assertTrue(all(
+            fields['request_timeout'] == 300.0 for _, fields in client.calls
+        ))
 
     def test_karma_sign_accepts_user_approved_signature_without_timestamp(self):
         client = FakeKarmaClient(b'certificate')

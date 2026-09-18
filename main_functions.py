@@ -81,6 +81,7 @@ def read_create_config(config_path):
         'karma_url': 'http://127.0.0.1:8080/',
         'karma_module': 'capi',
         'karma_timeout': 15.0,
+        'karma_operation_timeout': 300.0,
         'signing_mode': 'auto',
     }
 

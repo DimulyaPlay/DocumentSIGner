@@ -123,10 +123,11 @@ def _raise_for_karma_result(result):
 
 
 class KarmaHttpClient:
-    def __init__(self, base_url, module, timeout, init_params):
+    def __init__(self, base_url, module, timeout, init_params, operation_timeout=300.0):
         self.base_url = base_url.rstrip('/') + '/'
         self.module = module.strip('/') or 'capi'
         self.timeout = timeout
+        self.operation_timeout = max(float(operation_timeout), float(timeout))
         self.init_params = init_params
         self.client_id = 'DocumentSIGner-{}-{}'.format(os.getpid(), uuid.uuid4().hex)
 
@@ -134,13 +135,14 @@ class KarmaHttpClient:
     def operation_url(self):
         return urllib.parse.urljoin(self.base_url, self.module)
 
-    def _open(self, request):
+    def _open(self, request, timeout=None):
+        request_timeout = self.timeout if timeout is None else timeout
         parsed = urllib.parse.urlsplit(request.full_url)
         if parsed.hostname in ('127.0.0.1', 'localhost', '::1'):
             return urllib.request.build_opener(urllib.request.ProxyHandler({})).open(
-                request, timeout=self.timeout
+                request, timeout=request_timeout
             )
-        return urllib.request.urlopen(request, timeout=self.timeout)
+        return urllib.request.urlopen(request, timeout=request_timeout)
 
     def service_info(self):
         request = urllib.request.Request(
@@ -154,7 +156,7 @@ class KarmaHttpClient:
             raise SigningError('слишком большой ответ GetServiceInfo')
         return json.loads(body.decode('utf-8-sig'))
 
-    def request(self, mode, **fields):
+    def request(self, mode, request_timeout=None, **fields):
         payload = {
             'mode': mode,
             'currentStores': [CURRENT_USER_MY_STORE.copy()],
@@ -173,7 +175,7 @@ class KarmaHttpClient:
             method='POST',
         )
         try:
-            with self._open(request) as response:
+            with self._open(request, timeout=request_timeout) as response:
                 body = response.read(128 * 1024 * 1024 + 1)
         except urllib.error.HTTPError as error:
             raise SigningError('HTTP {} от КАРМЫ'.format(error.code))
@@ -294,6 +296,7 @@ class KarmaSigner:
             content = base64.b64encode(source.read()).decode('ascii')
         signed = self.client.request(
             27,
+            request_timeout=self.client.operation_timeout,
             certInclude=2,
             isAttached=False,
             senderCertId=certificate_id,
@@ -310,6 +313,7 @@ class KarmaSigner:
             raise SigningError('КАРМА вернула некорректную Base64-подпись: {}'.format(error))
         verified = self.client.request(
             29,
+            request_timeout=self.client.operation_timeout,
             isAttached=False,
             sendSignData=encoded_signature,
             fileData=content,
@@ -389,8 +393,15 @@ def initialize_signing(config, crypto_certificates):
     karma_url = config.get('karma_url', 'http://127.0.0.1:8080/')
     karma_module = config.get('karma_module', 'capi')
     karma_timeout = float(config.get('karma_timeout', 15.0))
+    karma_operation_timeout = float(config.get('karma_operation_timeout', 300.0))
     init_params = build_karma_init_params(karma_module)
-    client = KarmaHttpClient(karma_url, karma_module, karma_timeout, init_params)
+    client = KarmaHttpClient(
+        karma_url,
+        karma_module,
+        karma_timeout,
+        init_params,
+        operation_timeout=karma_operation_timeout,
+    )
 
     karma_signer = None
     karma_error = ''
