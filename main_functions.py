@@ -9,6 +9,8 @@ import re
 import sys
 import locale
 import tempfile
+import getpass
+import zlib
 from functools import lru_cache
 from pypdf import PageObject, PdfReader, PdfWriter, Transformation
 from pypdf.generic import ArrayObject, Fit, FloatObject, NameObject, RectangleObject
@@ -33,10 +35,40 @@ from signing_service import (get_active_certificates, get_active_provider_name,
                              get_signing_mode, get_signing_mode_availability,
                              initialize_signing, set_signing_mode,
                              sign_with_active_provider)
-config_folder = os.path.join(os.path.expanduser('~/Documents'), 'DocumentSIGner')
+def _get_user_data_folder():
+    """Return a writable local folder for the current Windows user."""
+    local_app_data = os.environ.get('LOCALAPPDATA')
+    if local_app_data:
+        return os.path.join(local_app_data, 'DocumentSIGner')
+    return os.path.join(os.path.expanduser('~'), 'AppData', 'Local', 'DocumentSIGner')
+
+
+config_folder = _get_user_data_folder()
+legacy_config_folder = os.path.join(os.path.expanduser('~/Documents'), 'DocumentSIGner')
+if not os.path.exists(config_folder) and os.path.isdir(legacy_config_folder):
+    try:
+        shutil.copytree(legacy_config_folder, config_folder)
+    except OSError:
+        traceback.print_exc()
 os.makedirs(config_folder, exist_ok=True)
 config_file = os.path.join(config_folder, 'config.json')
 file_paths_queue = Queue()
+
+
+def get_user_ipc_port():
+    """Return a stable per-user port, including in concurrent domain sessions."""
+    identity = '{}\\{}'.format(
+        os.environ.get('USERDOMAIN', ''),
+        os.environ.get('USERNAME') or getpass.getuser(),
+    ).casefold().encode('utf-8', errors='replace')
+    return 49152 + (zlib.crc32(identity) % 16384)
+
+
+def get_application_executable():
+    """Return the executable or script that starts this application."""
+    if getattr(sys, 'frozen', False):
+        return os.path.abspath(sys.executable)
+    return os.path.abspath(sys.argv[0])
 
 ALLOWED_EXTENSIONS = ('.blp', '.bmp', '.dib', '.bufr', '.cur', '.pcx', '.dcx', '.dds', '.ps', '.eps', '.fit',
                '.fits', '.fli', '.flc', '.fpx', '.ftc', '.ftu', '.gbr', '.gif', '.grib', '.h5', '.hdf',
@@ -285,8 +317,10 @@ def decode_document(s_source_file, cert_data):
 
 def toggle_startup_registry(enable: bool):
     app_name = "DocumentSIGner"
-    exe_path = sys.executable if getattr(sys, 'frozen', False) else sys.argv[0]
-    exe_path = os.path.join(os.path.dirname(exe_path), 'update.exe')
+    app_executable = get_application_executable()
+    updater_path = os.path.join(os.path.dirname(app_executable), 'Update.exe')
+    app_dir_is_writable = os.access(os.path.dirname(app_executable), os.W_OK)
+    exe_path = updater_path if os.path.isfile(updater_path) and app_dir_is_writable else app_executable
     exe_path_with_param = f'"{exe_path}" -autorun'
     key = r"Software\Microsoft\Windows\CurrentVersion\Run"
     try:
@@ -731,9 +765,11 @@ def add_to_context_menu():
     try:
         with reg.CreateKey(reg.HKEY_CURRENT_USER, key_base) as key:
             reg.SetValueEx(key, '', 0, reg.REG_SZ, 'Подписать с помощью DocumentSIGner')
+            reg.SetValueEx(key, 'Icon', 0, reg.REG_SZ, get_application_executable())
+            reg.SetValueEx(key, 'MultiSelectModel', 0, reg.REG_SZ, 'Player')
         with reg.CreateKey(reg.HKEY_CURRENT_USER, command_key) as key:
-            exe_path = f'"{os.path.abspath(sys.argv[0])}" "%1"'
-            reg.SetValueEx(key, '', 0, reg.REG_SZ, exe_path)
+            command = f'"{get_application_executable()}" "%1"'
+            reg.SetValueEx(key, '', 0, reg.REG_SZ, command)
         return 1
     except Exception:
         traceback.print_exc()
@@ -741,13 +777,25 @@ def add_to_context_menu():
         return 0
 
 
-def remove_from_context_menu():
+def is_system_context_menu_installed():
+    key_path = r'Software\Classes\*\shell\DocumentSIGner\command'
     try:
-        key_path = r'*\shell\DocumentSIGner'
-        reg.DeleteKey(reg.HKEY_CLASSES_ROOT, key_path + r'\command')
-        reg.DeleteKey(reg.HKEY_CLASSES_ROOT, key_path)
+        with reg.OpenKey(reg.HKEY_LOCAL_MACHINE, key_path, 0, reg.KEY_READ):
+            return True
     except OSError:
-        pass
+        return False
+
+
+def is_user_context_menu_installed():
+    key_path = r'Software\Classes\*\shell\DocumentSIGner\command'
+    try:
+        with reg.OpenKey(reg.HKEY_CURRENT_USER, key_path, 0, reg.KEY_READ):
+            return True
+    except OSError:
+        return False
+
+
+def remove_from_context_menu():
     base_path = r'Software\Classes\*\shell\DocumentSIGner'
     try:
         reg.DeleteKey(reg.HKEY_CURRENT_USER, base_path + r'\command')
@@ -1777,7 +1825,7 @@ def send_file_path_to_existing_instance(file_paths):
     attempts = 10
     for _ in range(attempts):
         try:
-            with socket.create_connection(('localhost', 65432), timeout=0.5) as client_socket:
+            with socket.create_connection(('127.0.0.1', get_user_ipc_port()), timeout=0.5) as client_socket:
                 data = '\n'.join(file_paths)
                 client_socket.sendall(data.encode('utf-8'))
             return 1
@@ -1881,6 +1929,8 @@ def update_updater():
     import configparser
     updater_config = configparser.ConfigParser()
     app_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+    if not os.access(app_dir, os.W_OK):
+        return
     updater_config.read(os.path.join(app_dir, 'Update.cfg'), encoding='utf-8')
     reference_folder = updater_config.get('Settings', 'reference_folder', fallback='').strip()
     if not reference_folder:

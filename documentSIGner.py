@@ -8,6 +8,9 @@ from main_functions import (ALLOWED_EXTENSIONS, FileDialog, FileWatcher,
                             config, config_folder, decode_document,
                             file_paths_queue, filter_inappropriate_files,
                             get_cert_data, install_certificates,
+                            get_user_ipc_port,
+                            is_system_context_menu_installed,
+                            is_user_context_menu_installed,
                             get_signing_mode_state,
                             initialize_signing_system,
                             parse_rule_line, remove_from_context_menu,
@@ -21,7 +24,7 @@ import traceback
 
 # .venv\Scripts\pyinstaller.exe --windowed --noconfirm --noupx --contents-directory "." --icon "icons8-legal-document-64.ico" --add-data "icons8-legal-document-64.ico;." --add-data "35.gif;." --add-data "Update.exe;." --add-data "root_certificates;." --add-data "Update.cfg;." --add-data "dcs.png;." --add-data "dcs-copy-in-law.png;." --add-data "dcs-copy.png;." --add-data "dcs-copy-no-in-law.png;." documentSIGner.py
 
-version = 'Версия 2.10.3'
+version = 'Версия 2.10.4'
 
 
 def exception_hook(exc_type, exc_value, exc_traceback):
@@ -58,8 +61,15 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.toggle_stamp_on_original.triggered.connect(self.toggle_stamp)
         self.toggle_context_menu = menu.addAction("Пункт в контекстном меню")
         self.toggle_context_menu.setCheckable(True)
-        self.toggle_context_menu.setChecked(config['context_menu'])
-        self.toggle_context_menu.triggered.connect(self.toggle_context_menu_option)
+        system_context_menu = is_system_context_menu_installed()
+        user_context_menu = is_user_context_menu_installed()
+        self.toggle_context_menu.setChecked(system_context_menu or user_context_menu)
+        config['context_menu'] = user_context_menu
+        if system_context_menu:
+            self.toggle_context_menu.setEnabled(False)
+            self.toggle_context_menu.setToolTip('Установлено для всех пользователей администратором')
+        else:
+            self.toggle_context_menu.triggered.connect(self.toggle_context_menu_option)
         self.toggle_autorun = menu.addAction("Автозапуск приложения")
         self.toggle_autorun.setCheckable(True)
         self.toggle_autorun.setChecked(config['autorun'])
@@ -465,7 +475,7 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
             self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self.server_socket.settimeout(0.5)
-            self.server_socket.bind(('localhost', 65432))
+            self.server_socket.bind(('127.0.0.1', get_user_ipc_port()))
             self.server_socket.listen()
             while not self.socket_stop_event.is_set():
                 try:
@@ -557,7 +567,7 @@ def run_startup_maintenance():
 
 
 if __name__ == '__main__':
-    lock_file_path = os.path.join(os.path.dirname(sys.argv[0]), 'app_instance.lock')
+    lock_file_path = os.path.join(config_folder, 'app_instance.lock')
     # Попытка захватить блокировку файла
     lock_file = open(lock_file_path, 'w')
     try:
@@ -580,9 +590,8 @@ if __name__ == '__main__':
                 sys.exit(0)
     else:
         if getattr(sys, 'frozen', False) or '__compiled__' in globals():
-            exe_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
-            log_out = os.path.join(exe_dir, 'console_output.log')
-            log_err = os.path.join(exe_dir, 'console_errors.log')
+            log_out = os.path.join(config_folder, 'console_output.log')
+            log_err = os.path.join(config_folder, 'console_errors.log')
             sys.stdout = open(log_out, 'a', buffering=1)
             sys.stderr = open(log_err, 'a', buffering=1)
         if len(sys.argv) > 1:
