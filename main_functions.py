@@ -12,6 +12,7 @@ import tempfile
 import getpass
 import zlib
 from functools import lru_cache
+from deployment_config import DEFAULTS, installation_directory, read_defaults, read_rules_lines, seed_rules
 from pypdf import PageObject, PdfReader, PdfWriter, Transformation
 from pypdf.generic import ArrayObject, Fit, FloatObject, NameObject, RectangleObject
 from threading import Lock, Timer, Thread
@@ -70,6 +71,16 @@ def get_application_executable():
         return os.path.abspath(sys.executable)
     return os.path.abspath(sys.argv[0])
 
+
+def get_application_launcher():
+    """Prefer the independent updater for normal starts; source runs stay direct."""
+    executable = get_application_executable()
+    if getattr(sys, 'frozen', False):
+        updater = os.path.join(os.path.dirname(executable), 'Update.exe')
+        if os.path.isfile(updater):
+            return updater
+    return executable
+
 ALLOWED_EXTENSIONS = ('.blp', '.bmp', '.dib', '.bufr', '.cur', '.pcx', '.dcx', '.dds', '.ps', '.eps', '.fit',
                '.fits', '.fli', '.flc', '.fpx', '.ftc', '.ftu', '.gbr', '.gif', '.grib', '.h5', '.hdf',
                '.png', '.apng', '.jp2', '.j2k', '.jpc', '.jpf', '.jpx', '.j2c', '.icns', '.ico', '.im',
@@ -98,26 +109,11 @@ def _write_json_atomic(path, value):
 
 
 def read_create_config(config_path):
-    default_configuration = {
-        "stamp_on_original": True,
-        "csp_path": r"C:\Program Files\Crypto Pro\CSP",
-        'last_cert': '',
-        'widget_visible': False,
-        "context_menu": False,
-        'autorun': False,
-        'default_page': 2,
-        'stamp_place': 1,
-        'notify': False,
-        'normalize_to_a4': False,
-        'karma_enabled': True,
-        'karma_url': 'http://127.0.0.1:8080/',
-        'karma_module': 'capi',
-        'karma_timeout': 15.0,
-        'karma_operation_timeout': 300.0,
-        'signing_mode': 'auto',
-    }
-
-    configuration = default_configuration.copy()
+    configuration = DEFAULTS.copy()
+    try:
+        configuration.update(read_defaults())
+    except Exception as error:
+        print(f'Не удалось прочитать deployment.ini: {error}')
     if os.path.exists(config_path):
         try:
             with open(config_path, 'r', encoding='utf-8') as configfile:
@@ -136,6 +132,7 @@ def save_config():
 
 
 config = read_create_config(config_file)
+seed_rules(config_folder)
 
 
 @lru_cache(maxsize=1)
@@ -316,15 +313,14 @@ def decode_document(s_source_file, cert_data):
 
 
 def toggle_startup_registry(enable: bool):
+    if is_machine_install():
+        return False  # Machine integrations belong to the installer, not HKCU.
     app_name = "DocumentSIGner"
-    app_executable = get_application_executable()
-    updater_path = os.path.join(os.path.dirname(app_executable), 'Update.exe')
-    app_dir_is_writable = os.access(os.path.dirname(app_executable), os.W_OK)
-    exe_path = updater_path if os.path.isfile(updater_path) and app_dir_is_writable else app_executable
-    exe_path_with_param = f'"{exe_path}" -autorun'
+    app_executable = get_application_launcher()
+    exe_path_with_param = f'"{app_executable}" -autorun'
     key = r"Software\Microsoft\Windows\CurrentVersion\Run"
     try:
-        with reg.OpenKey(reg.HKEY_CURRENT_USER, key, 0, reg.KEY_ALL_ACCESS) as reg_key:
+        with reg.CreateKeyEx(reg.HKEY_CURRENT_USER, key, 0, reg.KEY_SET_VALUE) as reg_key:
             if enable:
                 reg.SetValueEx(reg_key, app_name, 0, reg.REG_SZ, exe_path_with_param)
             else:
@@ -335,6 +331,38 @@ def toggle_startup_registry(enable: bool):
         return True
     except Exception as e:
         print(f"[!] Ошибка автозапуска через реестр: {e}")
+        return False
+
+
+def is_machine_install():
+    key = r'Software\Microsoft\Windows\CurrentVersion\Uninstall\{B9ED3766-CC4D-4B63-838C-46E887C13CD8}_is1'
+    try:
+        with reg.OpenKey(reg.HKEY_LOCAL_MACHINE, key, 0, reg.KEY_READ | reg.KEY_WOW64_32KEY) as handle:
+            location = reg.QueryValueEx(handle, 'InstallLocation')[0]
+        return os.path.normcase(os.path.abspath(location)) == os.path.normcase(str(installation_directory()))
+    except OSError:
+        return False
+
+
+def is_system_autorun_installed():
+    return _autorun_installed(reg.HKEY_LOCAL_MACHINE)
+
+
+def is_user_autorun_installed():
+    return _autorun_installed(reg.HKEY_CURRENT_USER)
+
+
+def _autorun_installed(root):
+    try:
+        with reg.OpenKey(root, r'Software\Microsoft\Windows\CurrentVersion\Run',
+                         0, reg.KEY_READ | reg.KEY_WOW64_32KEY) as handle:
+            command = reg.QueryValueEx(handle, 'DocumentSIGner')[0]
+        # Accept the previous direct launcher as well as the updater launcher.
+        return command.casefold() in {
+            f'"{path}" -autorun'.casefold()
+            for path in (get_application_executable(), get_application_launcher())
+        }
+    except OSError:
         return False
 
 
@@ -713,10 +741,10 @@ def create_stamp_image(cert_name, cert_info, stamp='regular'):
 
 
 def add_text_to_stamp(cert_name, fingerprint, create_date, exp_date, stamp='regular'):
-    template_path_main = os.path.join(os.path.dirname(sys.argv[0]), 'dcs.png')
-    template_path_copy = os.path.join(os.path.dirname(sys.argv[0]), 'dcs-copy.png')
-    template_path_copy_in_law = os.path.join(os.path.dirname(sys.argv[0]), 'dcs-copy-in-law.png')
-    template_path_copy_no_in_law = os.path.join(os.path.dirname(sys.argv[0]), 'dcs-copy-no-in-law.png')
+    template_path_main = resource_path('dcs.png')
+    template_path_copy = resource_path('dcs-copy.png')
+    template_path_copy_in_law = resource_path('dcs-copy-in-law.png')
+    template_path_copy_no_in_law = resource_path('dcs-copy-no-in-law.png')
     text_positions_main = {
         'cert_name': (20, 145),
         'fingerprint': (20, 185),
@@ -742,7 +770,7 @@ def add_text_to_stamp(cert_name, fingerprint, create_date, exp_date, stamp='regu
         text_positions = text_positions_main
     template_image = Image.open(template_path)
     draw = ImageDraw.Draw(template_image)
-    font_path = 'times.ttf'
+    font_path = resource_path('times.ttf')
     font = ImageFont.truetype(font_path, 24)
     draw.text(text_positions['cert_name'], "Владелец:", fill='blue', font=font)
     draw.text(text_positions['cert_name'], "                          " + cert_name, fill='blue', font=font)
@@ -754,7 +782,7 @@ def add_text_to_stamp(cert_name, fingerprint, create_date, exp_date, stamp='regu
     if stamp.startswith('copy-') and stamp not in ('copy', 'copy-nolaw'):
         in_law_date = stamp.split('-', 1)[1]
         draw.text(text_positions['in_law_date'],f"Вступил в законную силу {in_law_date}",fill='blue',font=ImageFont.truetype(font_path, 34))
-    modified_image_path = os.path.join(os.path.dirname(sys.argv[0]), 'modified_stamp.png')
+    modified_image_path = os.path.join(config_folder, 'modified_stamp.png')
     template_image.save(modified_image_path)
     return modified_image_path
 
@@ -1010,7 +1038,7 @@ def resource_path(relative_path):
         # PyInstaller создает временную папку и устанавливает переменную _MEIPASS
         base_path = sys._MEIPASS
     except Exception:
-        base_path = os.path.abspath(".")
+        base_path = os.path.dirname(os.path.abspath(__file__))
 
     return os.path.join(base_path, relative_path)
 
@@ -1472,8 +1500,7 @@ class FileDialog(QDialog):
 
     def reload_rules(self):
         try:
-            with open(self.rules_file, 'r') as rules_file:
-                self.rules = rules_file.readlines()
+            self.rules = read_rules_lines(self.rules_file)
         except FileNotFoundError:
             self.rules = []
 
@@ -1782,14 +1809,13 @@ class RulesDialog(QDialog):
             rules_file = self.rules_file
         if not os.path.exists(self.rules_file) and not from_file:
             return
-        with open(rules_file, 'r') as file:
-            lines = file.readlines()
-            self.table.setRowCount(0)
-            for line in lines:
-                parts = line.strip().split('|')
-                if len(parts) == 4:
-                    self.add_row(parts[0], parts[1], parts[2], parts[3])
-            self.resize_columns_to_max_width()
+        lines = read_rules_lines(rules_file)
+        self.table.setRowCount(0)
+        for line in lines:
+            parts = line.strip().split('|')
+            if len(parts) == 4:
+                self.add_row(parts[0], parts[1], parts[2], parts[3])
+        self.resize_columns_to_max_width()
 
     def save_rules(self, to_file=False):
         file_for_save = self.rules_file
@@ -1800,7 +1826,7 @@ class RulesDialog(QDialog):
             if not file_for_save:
                 return
 
-        with open(file_for_save, 'w') as file:
+        with open(file_for_save, 'w', encoding='utf-8') as file:
             for row in range(self.table.rowCount()):
                 source_dir = self.table.item(row, 0).text()
                 patterns = self.table.item(row, 1).text()
@@ -1925,40 +1951,15 @@ class FileWatcher:
             self.observer.join(timeout=2)
 
 
-def update_updater():
-    import configparser
-    updater_config = configparser.ConfigParser()
-    app_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
-    if not os.access(app_dir, os.W_OK):
-        return
-    updater_config.read(os.path.join(app_dir, 'Update.cfg'), encoding='utf-8')
-    reference_folder = updater_config.get('Settings', 'reference_folder', fallback='').strip()
-    if not reference_folder:
-        return
-    for filename in ('Update.exe', 'Update.cfg'):
-        local_file_path = os.path.join(app_dir, filename)
-        reference_file_path = os.path.join(reference_folder, filename)
-        if not os.path.isfile(reference_file_path):
-            continue
-        if not os.path.exists(local_file_path) or os.path.getmtime(reference_file_path) > os.path.getmtime(local_file_path):
-            shutil.copy2(reference_file_path, local_file_path)
-            print(f"Updated {filename} to the latest version.")
-
-
 def install_certificates():
     """
     Устанавливает все сертификаты (.cer, .crt, .pem) из папки root_certificates
     в хранилище "Промежуточные центры сертификации" (CA)
     текущего пользователя (CurrentUser).
     """
-    exe_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
-    cert_dir = os.path.join(exe_dir, 'root_certificates')
-    if not os.path.exists(cert_dir):
-        try:
-            os.mkdir(cert_dir)
-        except OSError:
-            print(f"Папка не найдена и не удалось создать: {cert_dir}")
-            return
+    cert_dir = resource_path('root_certificates')
+    if not os.path.isdir(cert_dir):
+        return
     cert_extensions = (".cer", ".crt", ".pem")
     for filename in os.listdir(cert_dir):
         if not filename.lower().endswith(cert_extensions):

@@ -11,20 +11,22 @@ from main_functions import (ALLOWED_EXTENSIONS, FileDialog, FileWatcher,
                             get_user_ipc_port,
                             is_system_context_menu_installed,
                             is_user_context_menu_installed,
+                            is_machine_install, is_system_autorun_installed, is_user_autorun_installed,
                             get_signing_mode_state,
                             initialize_signing_system,
                             parse_rule_line, remove_from_context_menu,
                             resource_path, save_config,
                             select_signing_mode,
                             send_file_path_to_existing_instance,
-                            toggle_startup_registry, update_updater)
+                            toggle_startup_registry)
 import msvcrt
 import os
 import traceback
+from deployment_config import installation_directory, read_rules_lines
 
-# .venv\Scripts\pyinstaller.exe --windowed --noconfirm --noupx --contents-directory "." --icon "icons8-legal-document-64.ico" --add-data "icons8-legal-document-64.ico;." --add-data "35.gif;." --add-data "Update.exe;." --add-data "root_certificates;." --add-data "Update.cfg;." --add-data "dcs.png;." --add-data "dcs-copy-in-law.png;." --add-data "dcs-copy.png;." --add-data "dcs-copy-no-in-law.png;." documentSIGner.py
+# Build: .venv\Scripts\pyinstaller.exe --noconfirm documentSIGner.spec
 
-version = 'Версия 2.10.4'
+version = 'Версия 2.10.6'
 
 
 def exception_hook(exc_type, exc_value, exc_traceback):
@@ -63,16 +65,23 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
         self.toggle_context_menu.setCheckable(True)
         system_context_menu = is_system_context_menu_installed()
         user_context_menu = is_user_context_menu_installed()
+        machine_install = is_machine_install()
         self.toggle_context_menu.setChecked(system_context_menu or user_context_menu)
         config['context_menu'] = user_context_menu
-        if system_context_menu:
+        if system_context_menu or machine_install:
             self.toggle_context_menu.setEnabled(False)
             self.toggle_context_menu.setToolTip('Установлено для всех пользователей администратором')
         else:
             self.toggle_context_menu.triggered.connect(self.toggle_context_menu_option)
         self.toggle_autorun = menu.addAction("Автозапуск приложения")
         self.toggle_autorun.setCheckable(True)
-        self.toggle_autorun.setChecked(config['autorun'])
+        if not machine_install and (installation_directory() / '.documentsigner-install').is_file():
+            # Respect installer task changes, including removing autorun on upgrade.
+            config['autorun'] = is_user_autorun_installed()
+        self.toggle_autorun.setChecked(is_system_autorun_installed() if machine_install else config['autorun'])
+        if machine_install:
+            self.toggle_autorun.setEnabled(False)
+            self.toggle_autorun.setToolTip('Управляется параметрами установки для компьютера')
         self.toggle_autorun.triggered.connect(self.toggle_startup)
 
         self.normalize_a4_action = menu.addAction("Вписывать страницы в формат A4")
@@ -333,8 +342,7 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
             matching_files = []
             # Загрузка и проверка файла по правилам из rules.txt
             if os.path.exists(self.rules_file):
-                with open(self.rules_file, 'r') as file:
-                    rules = file.readlines()
+                rules = read_rules_lines(self.rules_file)
             else:
                 rules = []
             certificate_data = None
@@ -441,8 +449,7 @@ class SystemTrayGui(QtWidgets.QSystemTrayIcon):
     def create_notifiers(self):
         self.stop_notifiers()
         if os.path.exists(self.rules_file):
-            with open(self.rules_file, 'r') as file:
-                rules = file.readlines()
+            rules = read_rules_lines(self.rules_file)
         else:
             rules = []
         for rule in rules:
@@ -559,7 +566,7 @@ def main():
 
 
 def run_startup_maintenance():
-    for maintenance_task in (update_updater, install_certificates):
+    for maintenance_task in ((install_certificates,) if config.get('install_certificates', True) else ()):
         try:
             maintenance_task()
         except Exception:
