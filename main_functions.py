@@ -1,4 +1,5 @@
 import json
+from certificate_installation import install_certificates_from_directory
 import io
 import os
 import socket
@@ -1952,27 +1953,5 @@ class FileWatcher:
 
 
 def install_certificates():
-    """
-    Устанавливает все сертификаты (.cer, .crt, .pem) из папки root_certificates
-    в хранилище "Промежуточные центры сертификации" (CA)
-    текущего пользователя (CurrentUser).
-    """
-    cert_dir = resource_path('root_certificates')
-    if not os.path.isdir(cert_dir):
-        return
-    cert_extensions = (".cer", ".crt", ".pem")
-    for filename in os.listdir(cert_dir):
-        if not filename.lower().endswith(cert_extensions):
-            continue
-        cert_path = os.path.join(cert_dir, filename)
-        try:
-            subprocess.run(
-                ["certutil", "-user", "-addstore", "CA", cert_path],
-                check=True,
-                capture_output=True,
-                text=True,
-                creationflags=subprocess.CREATE_NO_WINDOW
-            )
-            print(f"Сертификат установлен в CA: {cert_path}")
-        except subprocess.CalledProcessError as error:
-            print(f"Не удалось установить сертификат {cert_path}: {error}")
+    """Устанавливает корневые и промежуточные сертификаты текущего пользователя."""
+    install_certificates_from_directory(resource_path('root_certificates'))
