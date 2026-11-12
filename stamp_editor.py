@@ -6,10 +6,12 @@ from PySide2.QtWidgets import (QDialog, QFrame, QHBoxLayout, QMessageBox,
 
 
 class PlaceImageStampOnA4(QDialog):
-    def __init__(self, file_path, pages, stamp_image_path):
+    def __init__(self, file_path, pages, stamp_image_path, initial_scale=25):
         super().__init__()
         self.file_path = file_path
         self.stamp_image_path = stamp_image_path
+        from deployment_config import stamp_scale_percent
+        self.initial_scale = stamp_scale_percent(initial_scale)
         self.pdf_document = pdfium.PdfDocument(file_path)
         self.total_pages = len(self.pdf_document)
         self.pages = self.parse_pages(pages)
@@ -56,7 +58,7 @@ class PlaceImageStampOnA4(QDialog):
         self.page_layout.setContentsMargins(0, 0, 0, 0)
         self.page_layout.setSpacing(0)
 
-        self.stamp_widget = ImageStampWidget(self.stamp_image_path)
+        self.stamp_widget = ImageStampWidget(self.stamp_image_path, self.initial_scale)
         self.page_layout.addWidget(self.stamp_widget)
         self.page_frame.setLayout(self.page_layout)
 
@@ -75,7 +77,7 @@ class PlaceImageStampOnA4(QDialog):
         # Слайдер масштаба
         self.scale_slider = QSlider(Qt.Horizontal)
         self.scale_slider.setRange(10, 100)
-        self.scale_slider.setValue(25)
+        self.scale_slider.setValue(self.initial_scale)
         self.scale_slider.valueChanged.connect(self.stamp_widget.set_scale)
         control_panel.addWidget(self.scale_slider)
 
@@ -133,6 +135,9 @@ class PlaceImageStampOnA4(QDialog):
             page_size = QSize(543, 770)
         saved_state = self.results.get(page_idx, None)
         self.stamp_widget.set_page(QPixmap.fromImage(page_image), page_size, saved_state)
+        self.scale_slider.blockSignals(True)
+        self.scale_slider.setValue(round(self.stamp_widget.current_scale * 100))
+        self.scale_slider.blockSignals(False)
         self.page_frame.setFixedSize(page_size)
 
     # ---------------------- МНОГОСТРАНИЧНЫЙ РЕЖИМ ----------------------
@@ -245,10 +250,11 @@ class PlaceImageStampOnA4(QDialog):
 
 class ImageStampWidget(QWidget):
     """Виджет для отображения страницы и перетаскивания штампа."""
-    def __init__(self, stamp_path):
+    def __init__(self, stamp_path, initial_scale=25):
         super().__init__()
         self.stamp_original = QPixmap(stamp_path)
-        self.current_scale = 0.25
+        from deployment_config import stamp_scale_percent
+        self.current_scale = stamp_scale_percent(initial_scale) / 100.0
         self.stamp = self.stamp_original.scaledToWidth(
             int(self.stamp_original.width() * self.current_scale),
             Qt.SmoothTransformation

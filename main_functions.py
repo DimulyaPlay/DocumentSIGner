@@ -13,7 +13,7 @@ import tempfile
 import getpass
 import zlib
 from functools import lru_cache
-from deployment_config import DEFAULTS, installation_directory, read_defaults, read_rules_lines, seed_rules
+from deployment_config import DEFAULTS, installation_directory, read_defaults, read_policy, read_rules_lines, seed_rules
 from pypdf import PageObject, PdfReader, PdfWriter, Transformation
 from pypdf.generic import ArrayObject, Fit, FloatObject, NameObject, RectangleObject
 from threading import Lock, Timer, Thread
@@ -109,7 +109,11 @@ def _write_json_atomic(path, value):
         raise
 
 
+_startup_policy = {}
+
+
 def read_create_config(config_path):
+    global _startup_policy
     configuration = DEFAULTS.copy()
     try:
         configuration.update(read_defaults())
@@ -125,11 +129,27 @@ def read_create_config(config_path):
             print(f'Не удалось прочитать конфигурацию: {e}')
     if not os.path.exists(config_path) or configuration != locals().get('configuration_opened'):
         _write_json_atomic(config_path, configuration)
+    try:
+        _startup_policy = read_policy()
+    except Exception as error:
+        print(f'Не удалось прочитать политику deployment.ini: {error}')
+        _startup_policy = {}
+    configuration.update(_startup_policy)
     return configuration
 
 
 def save_config():
-    _write_json_atomic(config_file, config)
+    personal = config.copy()
+    if _startup_policy:
+        # Managed startup values must not replace the user's saved preferences.
+        with open(config_file, 'r', encoding='utf-8') as stream:
+            previous = json.load(stream)
+        for key in _startup_policy:
+            if key in previous:
+                personal[key] = previous[key]
+            else:
+                personal.pop(key, None)
+    _write_json_atomic(config_file, personal)
 
 
 config = read_create_config(config_file)
@@ -669,7 +689,8 @@ def normalize_pdf_in_place(file_path: str):
 
 def get_stamp_coords_for_filepath(file_path, pages, stamp_image):
     from stamp_editor import PlaceImageStampOnA4
-    dialog = PlaceImageStampOnA4(file_path, pages, stamp_image)
+    dialog = PlaceImageStampOnA4(file_path, pages, stamp_image,
+                               initial_scale=config.get('stamp_scale_percent', 25))
     if dialog.exec_() == QDialog.Accepted:
         results = {}
         pdf_reader = PdfReader(file_path)

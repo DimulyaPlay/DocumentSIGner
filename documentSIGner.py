@@ -26,7 +26,7 @@ from deployment_config import installation_directory, read_rules_lines
 
 # Build: .venv\Scripts\pyinstaller.exe --noconfirm documentSIGner.spec
 
-version = 'Версия 2.10.6'
+version = 'Версия 2.10.7'
 
 
 def exception_hook(exc_type, exc_value, exc_traceback):

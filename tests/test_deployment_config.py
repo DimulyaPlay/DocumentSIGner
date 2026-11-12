@@ -71,6 +71,50 @@ class DeploymentTests(unittest.TestCase):
             deployment_config.seed_rules(user)
         self.assertEqual((user / 'rules.txt').read_bytes(), b'initial rules')
 
+    def test_policy_reloads_on_startup_without_overwriting_personal_settings(self):
+        user_file = self.root / 'config.json'
+        user_file.write_text('{"stamp_scale_percent": 25, "notify": true}', encoding='utf-8')
+        self.ini('[Defaults]\nstamp_scale_percent=35\n[Policy]\nstamp_scale_percent=30\nnotify=false\n')
+        with patch.object(deployment_config, 'installation_directory', return_value=self.root), \
+                patch.object(main_functions, '_startup_policy', {}):
+            effective = main_functions.read_create_config(str(user_file))
+            self.assertEqual(effective['stamp_scale_percent'], 30)
+            self.assertFalse(effective['notify'])
+            effective['default_page'] = 1
+            with patch.object(main_functions, 'config_file', str(user_file)), \
+                    patch.object(main_functions, 'config', effective):
+                main_functions.save_config()
+            personal = json.loads(user_file.read_text(encoding='utf-8'))
+            self.assertEqual(personal['stamp_scale_percent'], 25)
+            self.assertTrue(personal['notify'])
+            self.assertEqual(personal['default_page'], 1)
+            self.ini('[Policy]\nstamp_scale_percent=35\n')
+            self.assertEqual(main_functions.read_create_config(str(user_file))['stamp_scale_percent'], 35)
+            (self.root / 'deployment.ini').unlink()
+            self.assertEqual(main_functions.read_create_config(str(user_file))['stamp_scale_percent'], 25)
+
+    def test_shared_policy_for_different_profiles_and_working_directories(self):
+        self.ini('[Policy]\nstamp_scale_percent=30\n')
+        binary_dir = self.root / 'bin'
+        binary_dir.mkdir()
+        (self.root / '.documentsigner-install').touch()
+        with patch.object(deployment_config.sys, 'frozen', True, create=True), \
+                patch.object(deployment_config.sys, 'executable', str(binary_dir / 'documentSIGner.exe')), \
+                patch.object(main_functions, '_startup_policy', {}):
+            for name, value in [('user-a.json', 25), ('user-b.json', 40)]:
+                profile = self.root / name
+                profile.write_text(json.dumps({'stamp_scale_percent': value}), encoding='utf-8')
+                self.assertEqual(main_functions.read_create_config(str(profile))['stamp_scale_percent'], 30)
+
+    def test_stamp_scale_validation(self):
+        for value in ('nan', 'inf', '0', '9', '101', '30.5', 'true'):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    deployment_config.read_policy(self.ini('[Policy]\nstamp_scale_percent=' + value))
+                self.assertEqual(deployment_config.stamp_scale_percent(value), 25)
+        self.assertEqual(deployment_config.read_policy(self.ini('[Policy]\nstamp_scale_percent=30')),
+                         {'stamp_scale_percent': 30})
+
     def test_rules_accept_utf8_and_legacy_cyrillic(self):
         path = self.root / 'rules.txt'
         for encoding in ('utf-8-sig', 'cp1251'):
