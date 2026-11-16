@@ -16,6 +16,7 @@ from functools import lru_cache
 from deployment_config import DEFAULTS, installation_directory, read_defaults, read_policy, read_rules_lines, seed_rules
 from pypdf import PageObject, PdfReader, PdfWriter, Transformation
 from pypdf.generic import ArrayObject, Fit, FloatObject, NameObject, RectangleObject
+from pdf_compatibility import inspect_pdf_pages, validate_pdf_file
 from threading import Lock, Timer, Thread
 from reportlab.pdfgen import canvas
 import winreg as reg
@@ -560,11 +561,14 @@ def _fit_page_to_a4(page, writer):
     page.add_transformation(_compact_transformation(fit_transform))
     _transform_annotation_geometry(page, fit_transform)
 
-    # merge_page clips by TrimBox. Point it at the transformed CropBox so that
-    # content hidden by the source PDF does not reappear in the A4 margins.
-    page.trimbox = _pdf_rectangle((
+    # pypdf 5 clips merges by CropBox (older releases used TrimBox). Both
+    # boxes must follow the transformed content, otherwise enlargement to A4
+    # cuts off the right/top of the original page.
+    fitted_box = _pdf_rectangle((
         offset_x, offset_y, offset_x + fitted_width, offset_y + fitted_height
     ))
+    page.cropbox = fitted_box
+    page.trimbox = RectangleObject(fitted_box)
     target_page = PageObject.create_blank_page(
         pdf=page.pdf,
         width=_pdf_coordinate(target_width),
@@ -638,7 +642,8 @@ def normalize_pdf_in_place(file_path: str):
             raise ValueError('PDF не содержит страниц')
         original_page_count = len(reader.pages)
         pages_to_normalize = [index for index, page in enumerate(reader.pages) if not _page_is_a4(page)]
-        if not pages_to_normalize:
+        needs_compaction = inspect_pdf_pages(reader)
+        if not pages_to_normalize and not needs_compaction:
             return False
 
         writer = PdfWriter()
@@ -649,6 +654,7 @@ def normalize_pdf_in_place(file_path: str):
             writer.add_metadata(reader.metadata)
         for page_index in pages_to_normalize:
             _fit_page_to_a4(writer.pages[page_index], writer)
+        inspect_pdf_pages(writer, compact=True)
         if source_outline:
             # clone_document_from_reader copies the catalog reference but not a
             # writable outline tree. Rebuild it against the cloned page objects.
@@ -669,6 +675,7 @@ def normalize_pdf_in_place(file_path: str):
 
         validation_reader = PdfReader(output_path, strict=False)
         try:
+            inspect_pdf_pages(validation_reader)
             if len(validation_reader.pages) != original_page_count:
                 raise ValueError('После преобразования изменилось количество страниц PDF')
             if not all(_page_is_a4(page) for page in validation_reader.pages):
@@ -875,12 +882,13 @@ def add_stamp(pdf_path, stamp_path, pagelist, custom_coords=None):
         overlay_stream.seek(0)
         return overlay_stream
 
-    temp_out = pdf_path + '.tmp'
+    temp_out = None
     overlay_streams = []
     reader = None
     writer = None
     try:
         reader = PdfReader(pdf_path)
+        inspect_pdf_pages(reader)
         writer = PdfWriter()
         source_outline = reader.outline
         writer.clone_document_from_reader(reader)
@@ -931,8 +939,14 @@ def add_stamp(pdf_path, stamp_path, pagelist, custom_coords=None):
             contents = page.get('/Contents')
             if contents is not None and not hasattr(contents, 'idnum'):
                 page[NameObject('/Contents')] = writer._add_object(contents)
-        with open(temp_out, 'wb') as f_out:
+        inspect_pdf_pages(writer, compact=True)
+        output_fd, temp_out = tempfile.mkstemp(
+            prefix='.document-signer-stamp-', suffix='.pdf',
+            dir=os.path.dirname(pdf_path) or '.',
+        )
+        with os.fdopen(output_fd, 'wb') as f_out:
             writer.write(f_out)
+        validate_pdf_file(temp_out)
         os.replace(temp_out, pdf_path)
     except Exception as e:
         print(f"[!] Не удалось вставить штамп в {pdf_path}: {e}")
@@ -941,7 +955,7 @@ def add_stamp(pdf_path, stamp_path, pagelist, custom_coords=None):
     finally:
         for overlay_stream in overlay_streams:
             overlay_stream.close()
-        if os.path.exists(temp_out):
+        if temp_out and os.path.exists(temp_out):
             os.unlink(temp_out)
         if reader and reader.stream:
             reader.stream.close()
@@ -1008,6 +1022,8 @@ def execute_sign_job(job):
                     normalize_pdf_in_place(file_path)
                 add_stamp(file_path, stamp_image_path, pages, custom_coords)
 
+        if file_path.lower().endswith('.pdf'):
+            validate_pdf_file(file_path)
         sign_path = sign_document(file_path, job['certificate_data'])
         if not sign_path:
             raise RuntimeError('Не удалось создать файл подписи')

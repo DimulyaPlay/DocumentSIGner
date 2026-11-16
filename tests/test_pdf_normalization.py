@@ -7,7 +7,8 @@ from unittest import mock
 import pypdfium2 as pdfium
 from pypdf import PdfReader, PdfWriter
 from pypdf.annotations import FreeText
-from pypdf.generic import NameObject, RectangleObject, TextStringObject
+from pypdf.generic import (DecodedStreamObject, DictionaryObject, NameObject,
+                           RectangleObject, TextStringObject)
 from reportlab.pdfgen import canvas
 
 import main_functions
@@ -48,6 +49,73 @@ class PdfNormalizationTests(unittest.TestCase):
         self.assertFalse(normalize_pdf_in_place(path))
         with open(path, 'rb') as result_file:
             self.assertEqual(original, result_file.read())
+
+    def test_legacy_long_numbers_are_repaired_even_on_a4(self):
+        path = self.path('legacy-a4.pdf')
+        writer = PdfWriter()
+        page = writer.add_blank_page(*A4_PORTRAIT)
+        stream = DecodedStreamObject()
+        stream.set_data(b'q 1.018546462180603962011105068 0 0 1 0 0 cm '
+                        b'0 0 100 100 re f Q')
+        page[NameObject('/Contents')] = writer._add_object(stream)
+        writer.write(path)
+        writer.close()
+        self.assertTrue(normalize_pdf_in_place(path))
+        reader = PdfReader(path, strict=True)
+        try:
+            data = reader.pages[0].get_contents().get_data()
+            self.assertNotIn(b'1.018546462180603962011105068', data)
+            self.assertIn(b're', data)
+            self.assertIn(b'cm', data)
+        finally:
+            reader.close()
+        self.assertFalse(normalize_pdf_in_place(path))
+
+    def test_catalog_instead_of_stamp_is_rejected_without_changes(self):
+        path = self.path('broken-stamp.pdf')
+        writer = PdfWriter()
+        page = writer.add_blank_page(*A4_PORTRAIT)
+        page[NameObject('/Resources')] = DictionaryObject({
+            NameObject('/XObject'): DictionaryObject({
+                NameObject('/Stamp'): writer._root_object.indirect_reference,
+            }),
+        })
+        stream = DecodedStreamObject()
+        stream.set_data(b'q /Stamp Do Q')
+        page[NameObject('/Contents')] = writer._add_object(stream)
+        writer.write(path)
+        writer.close()
+        with open(path, 'rb') as source:
+            original = source.read()
+        with self.assertRaisesRegex(ValueError, '/Catalog'):
+            normalize_pdf_in_place(path)
+        with self.assertRaisesRegex(ValueError, '/Catalog'):
+            add_stamp(path, 'unused.png', [0])
+        with open(path, 'rb') as result:
+            self.assertEqual(original, result.read())
+
+    def test_stamp_image_resources_survive_normalization_and_repeated_stamping(self):
+        path = self.path('images.pdf')
+        stamp_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'dcs.png')
+        pdf_canvas = canvas.Canvas(path, pagesize=(400, 900))
+        for _ in range(3):
+            pdf_canvas.drawImage(stamp_path, 20, 200, width=200, height=100, mask='auto')
+            pdf_canvas.showPage()
+        pdf_canvas.save()
+        normalize_pdf_in_place(path)
+        with mock.patch.dict(main_functions.config, {'stamp_place': 0}):
+            for _ in range(2):
+                add_stamp(path, stamp_path, 'all')
+        reader = PdfReader(path, strict=True)
+        try:
+            for page in reader.pages:
+                objects = page['/Resources']['/XObject']
+                self.assertTrue(objects)
+                for reference in objects.values():
+                    self.assertEqual('/Image', reference.get_object()['/Subtype'])
+                    self.assertTrue(reference.get_object().get_data())
+        finally:
+            reader.close()
 
     def test_mixed_pages_keep_count_orientation_and_metadata(self):
         path = self.path('mixed.pdf')
@@ -159,6 +227,26 @@ class PdfNormalizationTests(unittest.TestCase):
             self.assertGreater(middle[0], 200)
             self.assertLess(middle[1], 40)
             self.assertGreater(min(margin), 240)
+        finally:
+            bitmap.close()
+            page.close()
+            document.close()
+
+    def test_enlargement_to_a4_does_not_clip_right_edge(self):
+        path = self.path('enlarge.pdf')
+        pdf_canvas = canvas.Canvas(path, pagesize=(300, 400))
+        pdf_canvas.setFillColorRGB(1, 0, 0)
+        pdf_canvas.rect(270, 100, 20, 200, stroke=0, fill=1)
+        pdf_canvas.save()
+        normalize_pdf_in_place(path)
+        document = pdfium.PdfDocument(path)
+        page = document[0]
+        bitmap = page.render(scale=1)
+        try:
+            image = bitmap.to_pil().convert('RGB')
+            red = image.getpixel((555, image.height // 2))
+            self.assertGreater(red[0], 200)
+            self.assertLess(red[1], 40)
         finally:
             bitmap.close()
             page.close()
