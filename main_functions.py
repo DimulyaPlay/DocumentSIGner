@@ -1352,8 +1352,6 @@ class CustomListWidgetItem(QWidget):
         self.name = info["original_filename"]
         self.file_label.setText(self.name if not self.is_file_empty else "[ПУСТОЙ ФАЙЛ]" + self.name)
         self.file_label.setToolTip(self.name)
-        # Автовыбор на подпись
-        self.chb.setChecked(True)
         # --- страницы штампа ---
         pm = info["stamp_page_mode_code"]
         if not self.file_path.lower().endswith('.pdf'):
